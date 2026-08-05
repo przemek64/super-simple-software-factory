@@ -124,6 +124,15 @@ def _text_of(container: dict) -> str:
                    if isinstance(part, dict) and part.get("type") == "text")
 
 
+def _thinking_of(container: dict) -> str:
+    """Join the thinking blocks — fallback for models (observed: GLM with
+    thinking enabled) that stream their final answer through the reasoning
+    channel and emit no text_delta at all, even though stopReason is 'stop'
+    and the content is a complete, valid response."""
+    return "".join(part.get("thinking", "") for part in container.get("content", []) or []
+                   if isinstance(part, dict) and part.get("type") == "thinking")
+
+
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + "…"
 
@@ -215,22 +224,39 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     to hunt for in `ps` while the run sits there.
     """
     provider, model_id = resolve_model(request.model)
+
+    raw_path = Path(request.raw_output_path)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # A multi-line --system-prompt value silently truncates pi.cmd's argv
+    # parsing on Windows (npm's batch shim mishandles embedded newlines in a
+    # flag value, though a multi-line trailing positional is unaffected).
+    # pi resolves --system-prompt to file contents when given a path, so
+    # write it out and pass the path instead of the raw text.
+    system_prompt_path = raw_path.parent / "system_prompt.md"
+    system_prompt_path.write_text(request.system_prompt, encoding="utf-8")
+
     cmd = [
         PI_PATH, "-p", "--mode", "json",
         "--provider", provider, "--model", model_id,
         "--thinking", request.thinking,
         "--session-id", request.session_id,
         "--session-dir", request.session_dir,
-        "--system-prompt", request.system_prompt,
+        "--system-prompt", str(system_prompt_path),
     ]
     if request.tools:
         cmd += ["--tools", ",".join(request.tools)]
     for extension in request.extensions:
         cmd += ["-e", extension]
-    cmd.append(request.prompt)
 
-    raw_path = Path(request.raw_output_path)
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    # A long rendered prompt (e.g. a full issue body) can exceed Windows'
+    # command-line length limit, failing with "The command line is too long"
+    # before pi even starts. pi's `@file` syntax reads a file's content into
+    # the message — the argv element is just the short "@path", so write the
+    # prompt out and reference it instead of inlining it.
+    prompt_path = raw_path.parent / "prompt.md"
+    prompt_path.write_text(request.prompt, encoding="utf-8")
+    cmd.append(f"@{prompt_path}")
 
     result = PiResult(session_id=request.session_id,
                       context_window=context_window(provider, model_id))
@@ -242,40 +268,49 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     # a run that sat idle at 0% CPU with an empty raw_output.jsonl.
     process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, bufsize=1, cwd=request.cwd,
+                               text=True, encoding="utf-8", errors="replace",
+                               bufsize=1, cwd=request.cwd,
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
-    with raw_path.open("a") as raw:
-        assert process.stdout is not None
-        for line in process.stdout:
-            raw.write(line)
-            raw.flush()                      # events land on disk as they happen
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "message_end":
-                message = event.get("message", {})
-                if message.get("role") == "assistant":
-                    text = _text_of(message)
-                    if text:
-                        result.text = text   # last assistant message wins
-                    usage = message.get("usage", {}) or {}
-                    turn = _context_tokens(usage)
-                    result.tokens += turn
-                    result.usage.add_turn(usage, turn)
-                    # Occupancy is read off the last VALID assistant turn, the
-                    # way pi does it — an aborted or errored turn reports usage
-                    # you can't trust, so it must not overwrite a good reading.
-                    if turn and message.get("stopReason") not in ("aborted", "error"):
-                        result.context_tokens = turn
-                    result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
-            if on_event:
-                on_event(event)
+    try:
+        with raw_path.open("a") as raw:
+            assert process.stdout is not None
+            for line in process.stdout:
+                raw.write(line)
+                raw.flush()                      # events land on disk as they happen
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "message_end":
+                    message = event.get("message", {})
+                    if message.get("role") == "assistant":
+                        text = _text_of(message) or _thinking_of(message)
+                        if text:
+                            result.text = text   # last assistant message wins
+                        usage = message.get("usage", {}) or {}
+                        turn = _context_tokens(usage)
+                        result.tokens += turn
+                        result.usage.add_turn(usage, turn)
+                        # Occupancy is read off the last VALID assistant turn, the
+                        # way pi does it — an aborted or errored turn reports usage
+                        # you can't trust, so it must not overwrite a good reading.
+                        if turn and message.get("stopReason") not in ("aborted", "error"):
+                            result.context_tokens = turn
+                        result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
+                if on_event:
+                    on_event(event)
+    except Exception:
+        # A guardrail (or any other on_event callback) can abort mid-stream —
+        # e.g. permissions.guard_tool_paths catching a call to a sibling repo.
+        # Without this the child pi process is left running, orphaned, still
+        # doing the work the guard just said to stop.
+        process.kill()
+        raise
 
     stderr = process.stderr.read() if process.stderr else ""
     result.returncode = process.wait()

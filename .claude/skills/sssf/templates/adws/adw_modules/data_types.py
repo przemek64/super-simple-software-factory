@@ -142,6 +142,7 @@ class QualityCheckSpec(BaseModel):
     operation: QualityOperation
     argv: list[str]
     timeout_seconds: int = 120
+    cwd: Optional[str] = None       # overrides run.repo_root, e.g. for an app repo the builder targets
 
 
 class QualityCheckResult(BaseModel):
@@ -336,6 +337,10 @@ class ConfigDefaults(BaseModel):
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])
     data_dir: str = "adws/adw_data"
+    # The ONLY path outside repo_root any agent may touch (permissions.guard_tool_paths).
+    # A fixed, pre-created directory rather than letting a builder pick its own
+    # worktree location — no path is trusted just because the agent chose it itself.
+    worktree_root: Optional[str] = None
 
 
 class ObservabilityConfig(BaseModel):

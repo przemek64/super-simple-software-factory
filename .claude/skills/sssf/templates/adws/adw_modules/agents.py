@@ -240,6 +240,10 @@ def _event_forwarder(run, phase: Phase, agent_name: str):
         record = tracker.observe(event)
         if record is None:
             return
+        extra_roots = (str(run.worktree_root),) if run.worktree_root else ()
+        violation = permissions.guard_tool_paths(record, run.repo_root, extra_roots)
+        if violation:
+            raise permissions.PermissionBreach(f"{agent_name}: {violation}")
         # The call's span rides the columns; duration_ms stays in the payload as
         # pi's own authoritative number.
         run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,

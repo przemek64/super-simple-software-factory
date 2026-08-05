@@ -31,15 +31,84 @@ Two keys drive it, both in sssf.config.yaml:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from .data_types import AgentConfig, SSSFConfig
 
 
 class PermissionBreach(RuntimeError):
     """An agent modified a path it was not permitted to modify."""
+
+
+# `enforce()` below only ever sees paths INSIDE the repo — it works off `git
+# diff HEAD`, which cannot show a change to a path outside this working tree.
+# That is exactly how an agent reached a sibling repo unnoticed: it named an
+# absolute path in a `read`/`grep`/`find`/`ls`/`bash` tool call, and nothing
+# checked the path was inside `repo_root` before letting the call happen.
+_PATH_ARG_KEYS = ("path", "file_path")
+# (?<![A-Za-z0-9]) — without it this also matches inside a URL: "http://..."
+# has "p:" immediately before "//", which alone satisfies [A-Za-z]:[\\/].
+_ABS_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"'<>|]*")
+
+# pi reads this unconditionally before an agent does anything of its own —
+# not agent-chosen exploration, so it is exempt by exact-file match (not a
+# directory grant). Everything else outside repo_root/worktree_root stays blocked.
+_EXEMPT_FILES = {os.path.normcase(os.path.abspath(os.path.expanduser("~/.claude/CLAUDE.md")))}
+
+
+def _is_exempt(path_str: str) -> bool:
+    try:
+        return os.path.normcase(os.path.abspath(path_str.replace("\\", "/"))) in _EXEMPT_FILES
+    except (OSError, ValueError):
+        return False
+
+
+def _outside_all(path_str: str, roots) -> bool:
+    # NOT Path.resolve(): this repo's docs/ is a Windows junction to a vault
+    # folder outside the repo tree, and resolve() follows it — which would
+    # flag every legitimate in-repo doc read as an escape. Compare the named
+    # path as given (abspath only normalizes ./.. and case, no symlink chase).
+    try:
+        normalized = path_str.replace("\\", "/")
+        if not normalized.startswith("/") and ":" not in normalized[:3]:
+            return False   # relative — not absolute, so it's inside cwd by construction
+        if _is_exempt(normalized):
+            return False
+        candidate = Path(os.path.normcase(os.path.abspath(normalized)))
+        for root in roots:
+            resolved_root = Path(os.path.normcase(os.path.abspath(str(root))))
+            if candidate == resolved_root or resolved_root in candidate.parents:
+                return False
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def guard_tool_paths(record: dict, repo_root, extra_roots=()) -> Optional[str]:
+    """Fail fast on a tool call that names a path outside the repo (or the
+    one configured `worktree_root`, if any — see `ConfigDefaults.worktree_root`).
+
+    Called per tool call, before its result is even used, so a scout or
+    planner naming a sibling repo in a `read`/`bash` call aborts the run right
+    there — instead of quietly recording where that repo lives and a later
+    phase treating it as fair game.
+    """
+    roots = (repo_root, *extra_roots)
+    args = record.get("args") or {}
+    for key in _PATH_ARG_KEYS:
+        value = args.get(key)
+        if isinstance(value, str) and _outside_all(value, roots):
+            return f"{record.get('tool')} named a path outside the repo: {value}"
+    command = args.get("command")
+    if isinstance(command, str):
+        for match in _ABS_PATH_RE.findall(command):
+            if _outside_all(match, roots):
+                return f"{record.get('tool')} referenced a path outside the repo: {match}"
+    return None
 
 
 def _git(args: list[str], cwd) -> str:

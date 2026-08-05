@@ -56,6 +56,13 @@ class Run:
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
                                 if self._agent_map_path.exists() else {})
+        # `worktree_root` in config is a portable template (e.g. "../{repo_name}-worktrees"),
+        # not an absolute path — {repo_name} substitutes the actual checkout's folder
+        # name so the same config line works unchanged in every repo it's copied into.
+        template = cfg.defaults.worktree_root
+        self.worktree_root: Path | None = (
+            (self.repo_root / template.replace("{repo_name}", self.repo_root.name)).resolve()
+            if template else None)
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:

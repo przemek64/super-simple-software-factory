@@ -31,6 +31,13 @@ defaults:
     - adws/adw_sssf_config/
     - adws/adw_*.py
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
+  # The ONLY path outside the repo any agent may touch (adw_modules/permissions.py
+  # guard_tool_paths — see the module docstring). Unset by default: every tool call
+  # naming an absolute path outside the repo aborts the phase immediately. Uncomment
+  # to allow one extra directory, e.g. for a builder that legitimately needs a git
+  # worktree of a separate app repo. {repo_name} substitutes this checkout's own
+  # folder name at runtime, so the line is portable across repos unmodified.
+  # worktree_root: ../{repo_name}-worktrees
 
 observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
