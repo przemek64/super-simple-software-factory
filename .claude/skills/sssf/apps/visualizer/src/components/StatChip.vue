@@ -47,7 +47,7 @@ const text = computed(() => {
 
 <template>
   <span class="stat" :class="{ compact }" :title="TITLES[kind]">
-    <component :is="ICONS[kind]" class="stat-icon" :size="compact ? 17 : 19" :stroke-width="2" />
+    <component :is="ICONS[kind]" class="stat-icon" :size="compact ? 14 : 19" :stroke-width="2" />
     <span class="stat-value">{{ text }}</span>
   </span>
 </template>
@@ -76,10 +76,13 @@ const text = computed(() => {
   font-variant-numeric: tabular-nums;
 }
 
+/* Compact chips ride inside the waterfall blocks and follow their scale. */
 .stat.compact {
   padding: 0;
   border: none;
   background: transparent;
+  gap: 5px;
+  font-size: 13px;
 }
 
 .stat.compact .stat-value {

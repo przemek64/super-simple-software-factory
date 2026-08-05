@@ -404,6 +404,44 @@ function ticksFor(p: Phase): { x: number; ok: boolean }[] {
     }))
 }
 
+/**
+ * Minimum track width, in px.
+ *
+ * Block widths are percentages of the track, floored at MIN_BLOCK_PCT — so on a
+ * viewport-wide track a busy run squeezes every block down to ~50px and the
+ * names and descriptions ellipse away to nothing. Give the track a pixel floor
+ * that grows with the number of blocks instead, and let the waterfall scroll
+ * horizontally: MIN_BLOCK_PCT of that floor stays wide enough to read.
+ */
+const TRACK_MIN_PX = 1200
+const PX_PER_BLOCK = 136
+
+const trackMinPx = computed(() => {
+  const timed = Object.keys(blockLayout.value).length + (requestPhase.value ? 1 : 0)
+  const queued = phases.value.filter((p) => !p.started_at).length
+  return Math.max(TRACK_MIN_PX, (timed + queued) * PX_PER_BLOCK)
+})
+
+// ── Top scrollbar ────────────────────────────────────────────────────────────
+//
+// The chart is tall enough that a scrollbar under it sits off-screen, so the
+// affordance is mirrored above: an empty strip whose spacer matches the row's
+// max-content width, with scrollLeft mirrored both ways. `syncing` breaks the
+// feedback loop — setting one element's scrollLeft fires the other's handler.
+const topScrollEl = ref<HTMLElement | null>(null)
+const waterfallEl = ref<HTMLElement | null>(null)
+let syncing = false
+
+function mirrorScroll(from: HTMLElement | null, to: HTMLElement | null) {
+  if (syncing || !from || !to) return
+  syncing = true
+  to.scrollLeft = from.scrollLeft
+  // Release after the paint that the assignment schedules, not this tick.
+  requestAnimationFrame(() => {
+    syncing = false
+  })
+}
+
 const queuedByLane = computed(() => {
   const map: Record<string, Phase[]> = {}
   for (const lane of lanes.value) {
@@ -443,103 +481,112 @@ function selectPhase(p: Phase) {
       </span>
     </div>
 
-    <div v-if="phases.length" class="waterfall">
-      <div class="row axis-row">
-        <div class="label" />
-        <div class="track">
-          <span v-if="zonePct" class="zone-head" :style="{ width: `${zonePct}%` }">request</span>
-          <span
-            v-for="(t, i) in ticks"
-            :key="i"
-            class="axis-label"
-            :style="{ left: `${t.pct}%` }"
-            >{{ t.label }}</span
-          >
-        </div>
+    <div v-if="phases.length" class="chart" :style="{ '--track-min': `${trackMinPx}px` }">
+      <div
+        ref="topScrollEl"
+        class="hscroll-top"
+        @scroll="mirrorScroll(topScrollEl, waterfallEl)"
+      >
+        <div class="hscroll-spacer" />
       </div>
-
-      <div v-for="lane in lanes" :key="lane.id" class="row lane" :class="`kind-${lane.kind}`">
-        <div class="label">
-          <span class="lane-name" :style="{ color: lane.color }">
-            <component :is="KIND_ICONS[lane.kind]" class="lane-icon" :size="22" :stroke-width="2" />
-            {{ lane.label }}
-          </span>
-          <span v-if="lane.model" class="lane-meta lane-model" :title="lane.model">
-            <img v-if="modelIcon(lane.model)" class="model-icon" :src="modelIcon(lane.model)!" alt="" />
-            {{ modelName(lane.model) }}
-          </span>
-          <span
-            v-if="lane.context"
-            class="lane-ctx"
-            :title="`${NUM.format(lane.context.used)} / ${NUM.format(lane.context.window)} tokens used · ${NUM.format(lane.context.window - lane.context.used)} remaining`"
-          >
-            <span class="ctx-head">
-              <span class="ctx-label">Context</span>
-              <span class="ctx-pct">{{ contextLabel(lane.context) }}</span>
-            </span>
-            <span class="ctx-bar">
-              <span
-                class="ctx-fill"
-                :style="{
-                  width: contextFill(lane.context),
-                  background: `linear-gradient(90deg, ${hexAlpha(lane.color, 0.55)}, ${lane.color})`,
-                  boxShadow: `0 0 10px ${hexAlpha(lane.color, 0.45)}`,
-                }"
-              />
-            </span>
-          </span>
-          <span v-for="(line, i) in lane.metaLines" :key="i" class="lane-meta">{{ line }}</span>
+      <div ref="waterfallEl" class="waterfall" @scroll="mirrorScroll(waterfallEl, topScrollEl)">
+        <div class="row axis-row">
+          <div class="label" />
+          <div class="track">
+            <span v-if="zonePct" class="zone-head" :style="{ width: `${zonePct}%` }">request</span>
+            <span
+              v-for="(t, i) in ticks"
+              :key="i"
+              class="axis-label"
+              :style="{ left: `${t.pct}%` }"
+              >{{ t.label }}</span
+            >
+          </div>
         </div>
-        <div class="track">
-          <span v-if="zonePct" class="zone-divider" :style="{ left: `${zonePct}%` }" />
-          <span v-for="(t, i) in ticks" :key="i" class="gridline" :style="{ left: `${t.pct}%` }" />
-          <template v-for="p in lane.phases" :key="p.phase_id">
+
+        <div v-for="lane in lanes" :key="lane.id" class="row lane" :class="`kind-${lane.kind}`">
+          <div class="label">
+            <span class="lane-name" :style="{ color: lane.color }">
+              <component :is="KIND_ICONS[lane.kind]" class="lane-icon" :size="18" :stroke-width="2" />
+              {{ lane.label }}
+            </span>
+            <span v-if="lane.model" class="lane-meta lane-model" :title="lane.model">
+              <img v-if="modelIcon(lane.model)" class="model-icon" :src="modelIcon(lane.model)!" alt="" />
+              {{ modelName(lane.model) }}
+            </span>
+            <span
+              v-if="lane.context"
+              class="lane-ctx"
+              :title="`${NUM.format(lane.context.used)} / ${NUM.format(lane.context.window)} tokens used · ${NUM.format(lane.context.window - lane.context.used)} remaining`"
+            >
+              <span class="ctx-head">
+                <span class="ctx-label">Context</span>
+                <span class="ctx-pct">{{ contextLabel(lane.context) }}</span>
+              </span>
+              <span class="ctx-bar">
+                <span
+                  class="ctx-fill"
+                  :style="{
+                    width: contextFill(lane.context),
+                    background: `linear-gradient(90deg, ${hexAlpha(lane.color, 0.55)}, ${lane.color})`,
+                    boxShadow: `0 0 10px ${hexAlpha(lane.color, 0.45)}`,
+                  }"
+                />
+              </span>
+            </span>
+            <span v-for="(line, i) in lane.metaLines" :key="i" class="lane-meta">{{ line }}</span>
+          </div>
+          <div class="track">
+            <span v-if="zonePct" class="zone-divider" :style="{ left: `${zonePct}%` }" />
+            <span v-for="(t, i) in ticks" :key="i" class="gridline" :style="{ left: `${t.pct}%` }" />
+            <template v-for="p in lane.phases" :key="p.phase_id">
+              <button
+                v-if="blockGeom(p)"
+                class="block"
+                :class="[p.status, { selected: p.phase_id === phaseId }]"
+                :style="blockStyle(p, lane)"
+                :title="`${p.name} — ${p.status}${p.description ? `\n${p.description}` : ''}`"
+                @click="selectPhase(p)"
+              >
+                <span class="b-top">
+                  <span class="b-status" :class="p.status">{{
+                    STATUS_GLYPH[p.status ?? ''] ?? '○'
+                  }}</span>
+                  <span class="b-name">{{ p.name }}</span>
+                  <StatChip
+                    v-if="Number.isFinite(blockDurationMs(p))"
+                    class="b-dur"
+                    kind="runtime"
+                    compact
+                    :value="blockDurationMs(p)"
+                  />
+                </span>
+                <span class="b-desc">{{ p.description }}</span>
+                <span
+                  v-for="(tick, i) in ticksFor(p)"
+                  :key="i"
+                  class="tool-tick"
+                  :class="{ err: !tick.ok }"
+                  :style="{ left: `${tick.x}%` }"
+                />
+              </button>
+            </template>
             <button
-              v-if="blockGeom(p)"
-              class="block"
-              :class="[p.status, { selected: p.phase_id === phaseId }]"
-              :style="blockStyle(p, lane)"
-              :title="`${p.name} — ${p.status}${p.description ? `\n${p.description}` : ''}`"
+              v-for="(p, i) in queuedByLane[lane.id]"
+              :key="p.phase_id"
+              class="block queued"
+              :class="{ selected: p.phase_id === phaseId }"
+              :style="{ right: `${8 + i * 4}px`, width: '136px' }"
+              :title="`${p.name} — queued`"
               @click="selectPhase(p)"
             >
               <span class="b-top">
-                <span class="b-status" :class="p.status">{{
-                  STATUS_GLYPH[p.status ?? ''] ?? '○'
-                }}</span>
+                <span class="b-status queued">○</span>
                 <span class="b-name">{{ p.name }}</span>
-                <StatChip
-                  v-if="Number.isFinite(blockDurationMs(p))"
-                  class="b-dur"
-                  kind="runtime"
-                  compact
-                  :value="blockDurationMs(p)"
-                />
               </span>
-              <span class="b-desc">{{ p.description }}</span>
-              <span
-                v-for="(tick, i) in ticksFor(p)"
-                :key="i"
-                class="tool-tick"
-                :class="{ err: !tick.ok }"
-                :style="{ left: `${tick.x}%` }"
-              />
+              <span class="b-desc">queued</span>
             </button>
-          </template>
-          <button
-            v-for="(p, i) in queuedByLane[lane.id]"
-            :key="p.phase_id"
-            class="block queued"
-            :class="{ selected: p.phase_id === phaseId }"
-            :style="{ right: `${10 + i * 5}px`, width: '170px' }"
-            :title="`${p.name} — queued`"
-            @click="selectPhase(p)"
-          >
-            <span class="b-top">
-              <span class="b-status queued">○</span>
-              <span class="b-name">{{ p.name }}</span>
-            </span>
-            <span class="b-desc">queued</span>
-          </button>
+          </div>
         </div>
       </div>
     </div>
@@ -586,17 +633,73 @@ function selectPhase(p: Phase) {
   flex-wrap: wrap;
 }
 
-.waterfall {
+.chart {
+  --label-w: 224px;
   margin: 20px 28px;
+}
+
+/* The visible scrollbar, mirrored above the chart. */
+.hscroll-top {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Explicit, or the box collapses to the 1px spacer and clips its own bar. */
+  height: 16px;
+  margin-bottom: 7px;
+  border-radius: 999px;
+  /* An overlay hairline in --border is invisible against the panel — the bar is
+     the only affordance saying the timeline continues, so it stays lit. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--violet) rgba(6, 8, 15, 0.75);
+}
+
+.hscroll-spacer {
+  /* Exactly the row's max-content width, so the two bars travel in step. */
+  width: calc(var(--label-w) + var(--track-min, 1200px));
+  height: 1px;
+}
+
+.hscroll-top::-webkit-scrollbar {
+  height: 14px;
+}
+
+.hscroll-top::-webkit-scrollbar-track {
+  background: rgba(6, 8, 15, 0.75);
+  border-radius: 999px;
+}
+
+.hscroll-top::-webkit-scrollbar-thumb {
+  background: var(--violet);
+  border: 3px solid rgba(6, 8, 15, 0.75);
+  border-radius: 999px;
+}
+
+.hscroll-top::-webkit-scrollbar-thumb:hover {
+  background: var(--purple);
+}
+
+.waterfall {
   border: 1px solid var(--border-soft);
   border-radius: 16px;
   background: var(--surface);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  /* Scrolls (shift+wheel, drag, keyboard) but shows no bar of its own — the
+     strip above is the one handle. */
+  scrollbar-width: none;
 }
 
+.waterfall::-webkit-scrollbar {
+  display: none;
+}
+
+/* max-content so the track can exceed the viewport; min-width so a short run
+   still fills it. */
 .row {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: var(--label-w) minmax(var(--track-min, 1200px), 1fr);
+  width: max-content;
+  min-width: 100%;
 }
 
 .axis-row {
@@ -604,8 +707,21 @@ function selectPhase(p: Phase) {
   background: var(--panel-2);
 }
 
+/* The lane names stay put while the timeline scrolls under them. */
+.label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--panel);
+}
+
+.axis-row .label {
+  z-index: 3;
+  background: var(--panel-2);
+}
+
 .axis-row .track {
-  height: 40px;
+  height: 32px;
   overflow: hidden;
 }
 
@@ -617,23 +733,23 @@ function selectPhase(p: Phase) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 13px;
   color: var(--amber);
   border-right: 1px solid var(--border);
 }
 
 .axis-label {
   position: absolute;
-  bottom: 7px;
+  bottom: 6px;
   transform: translateX(-50%);
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   color: var(--dim);
   white-space: nowrap;
 }
 
 .label {
-  padding: 12px 16px;
+  padding: 10px 13px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -646,8 +762,8 @@ function selectPhase(p: Phase) {
 .lane-name {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 17px;
+  gap: 7px;
+  font-size: 14px;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -660,7 +776,7 @@ function selectPhase(p: Phase) {
 
 .lane-meta {
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   color: var(--dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -673,8 +789,8 @@ function selectPhase(p: Phase) {
 }
 
 .model-icon {
-  width: 17px;
-  height: 17px;
+  width: 14px;
+  height: 14px;
   flex: none;
   object-fit: contain;
 }
@@ -685,7 +801,7 @@ function selectPhase(p: Phase) {
   flex-direction: column;
   gap: 4px;
   margin-top: 2px;
-  max-width: 190px;
+  max-width: 152px;
 }
 
 .ctx-head {
@@ -696,7 +812,7 @@ function selectPhase(p: Phase) {
 }
 
 .ctx-label {
-  font-size: 14px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--faint);
@@ -704,12 +820,12 @@ function selectPhase(p: Phase) {
 
 .ctx-pct {
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: 11px;
   color: var(--dim);
 }
 
 .ctx-bar {
-  height: 6px;
+  height: 5px;
   border-radius: 999px;
   background: rgba(6, 8, 15, 0.75);
   border: 1px solid var(--border-soft);
@@ -733,7 +849,7 @@ function selectPhase(p: Phase) {
 
 .track {
   position: relative;
-  height: 118px;
+  height: 94px;
   overflow: hidden;
 }
 
@@ -753,16 +869,16 @@ function selectPhase(p: Phase) {
 
 .block {
   position: absolute;
-  top: 13px;
-  height: 92px;
+  top: 10px;
+  height: 74px;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 4px;
-  padding: 10px 12px 16px;
-  border-radius: 10px;
+  gap: 3px;
+  padding: 8px 10px 13px;
+  border-radius: 8px;
   border: 1px solid;
-  font-size: 16px;
+  font-size: 13px;
   color: var(--text);
   cursor: pointer;
   overflow: hidden;
@@ -778,13 +894,13 @@ function selectPhase(p: Phase) {
 .b-top {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .b-status {
   flex: none;
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .b-status.success {
@@ -805,7 +921,7 @@ function selectPhase(p: Phase) {
 }
 
 .block .b-name {
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -818,7 +934,7 @@ function selectPhase(p: Phase) {
 
 .block .b-desc {
   color: var(--dim);
-  font-size: 16px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
@@ -843,9 +959,9 @@ function selectPhase(p: Phase) {
 
 .tool-tick {
   position: absolute;
-  bottom: 4px;
+  bottom: 3px;
   width: 3px;
-  height: 9px;
+  height: 7px;
   background: currentColor;
   opacity: 0.55;
   border-radius: 1px;
