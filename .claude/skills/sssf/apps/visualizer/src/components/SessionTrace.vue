@@ -7,19 +7,28 @@ import type {
   EventRow,
   GateResult,
   Phase,
-  PhaseKind,
   Session,
   SessionUsage,
 } from '../lib/types'
-import { Bot, SquareTerminal, UserRound } from 'lucide-vue-next'
 import { fetchEnvelopes, fetchEvents, fetchGates, fetchSession } from '../lib/api'
 import { axisTicks, fmtDate, payloadOk, ts } from '../lib/format'
 import { modelIcon, modelName } from '../lib/models'
 import { agentColor, hexAlpha, parseAgentStart } from '../lib/events'
+import {
+  CODE_COLOR,
+  ENGINEER_COLOR,
+  KIND_ICONS,
+  contextFill,
+  contextLabel,
+  laneContext,
+  type Lane,
+} from '../lib/lanes'
+import { layoutMode } from '../lib/view'
 import { navigate, phaseCrumb } from '../lib/router'
 import StatusChip from './StatusChip.vue'
 import StatChip from './StatChip.vue'
 import PhaseDetail from './PhaseDetail.vue'
+import VerticalWaterfall from './VerticalWaterfall.vue'
 
 const props = defineProps<{ adwId: string; phaseId: string | null }>()
 
@@ -98,50 +107,8 @@ watchEffect(() => {
 })
 
 // ── Lanes ────────────────────────────────────────────────────────────────────
-
-const ENGINEER_COLOR = '#e8b64a'
-const CODE_COLOR = '#5ad2dd'
-
-const KIND_ICONS = { engineer: UserRound, code: SquareTerminal, agent: Bot }
-
-interface Lane {
-  id: string
-  label: string
-  /** Model driving this lane's agent — rendered with its provider icon. */
-  model: string | null
-  /** Context-window occupancy, or null while unknown (running / old db). */
-  context: LaneContext | null
-  metaLines: string[]
-  color: string
-  kind: PhaseKind
-  phases: Phase[]
-}
-
-interface LaneContext {
-  used: number
-  window: number
-  /** 0–100, uncapped by the floor applied to the bar's width. */
-  pct: number
-}
-
-/** Occupancy for an agent lane. Null unless BOTH numbers are real — a bar
- *  against an unknown ceiling would be decoration, not data. */
-function laneContext(info: AgentSession | undefined): LaneContext | null {
-  const used = info?.context_tokens ?? 0
-  const window = info?.context_window ?? 0
-  if (!used || !window) return null
-  return { used, window, pct: Math.min(100, (used / window) * 100) }
-}
-
-/** Sub-1% occupancy is common and real; round it away and the bar reads empty. */
-function contextLabel(ctx: LaneContext): string {
-  return ctx.pct < 1 ? `${ctx.pct.toFixed(1)}%` : `${Math.round(ctx.pct)}%`
-}
-
-/** Keep a non-zero fill visible — the exact numbers ride in the label and title. */
-function contextFill(ctx: LaneContext): string {
-  return `${Math.max(ctx.pct, 2)}%`
-}
+// The lane model itself lives in lib/lanes.ts — both layouts build the same
+// lanes and only differ in how they draw them.
 
 const NUM = new Intl.NumberFormat('en-US')
 
@@ -481,7 +448,21 @@ function selectPhase(p: Phase) {
       </span>
     </div>
 
-    <div v-if="phases.length" class="chart" :style="{ '--track-min': `${trackMinPx}px` }">
+    <VerticalWaterfall
+      v-if="phases.length && layoutMode === 'vertical'"
+      :lanes="lanes"
+      :phases="phases"
+      :events="events"
+      :now-ms="nowMs"
+      :phase-id="phaseId"
+      @select="selectPhase"
+    />
+
+    <div
+      v-else-if="phases.length"
+      class="chart"
+      :style="{ '--track-min': `${trackMinPx}px` }"
+    >
       <div
         ref="topScrollEl"
         class="hscroll-top"
@@ -593,8 +574,20 @@ function selectPhase(p: Phase) {
     <div v-else-if="loaded" class="empty-state">no phases recorded for this session</div>
     <div v-else-if="!apiError" class="empty-state">loading trace…</div>
 
+    <!-- Horizontal keeps the detail under the chart; vertical would put it a
+         very long scroll away from the block you just clicked, so there it
+         becomes a docked side panel that stays in view. -->
+    <aside v-if="selectedPhase && layoutMode === 'vertical'" class="drawer">
+      <PhaseDetail
+        :phase="selectedPhase"
+        :events="events"
+        :envelopes="envelopes"
+        :gates="gates"
+        @close="navigate(props.adwId)"
+      />
+    </aside>
     <PhaseDetail
-      v-if="selectedPhase"
+      v-else-if="selectedPhase"
       :phase="selectedPhase"
       :events="events"
       :envelopes="envelopes"
@@ -612,14 +605,15 @@ function selectPhase(p: Phase) {
 .run-strip {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 14px 24px;
+  gap: 12px;
+  padding: 7px 20px;
   border-bottom: 1px solid var(--border-soft);
   flex-wrap: wrap;
+  font-size: 12px;
 }
 
 .run-strip .request {
-  font-size: 17px;
+  font-size: 13px;
   color: var(--text);
   max-width: 52ch;
   overflow: hidden;
@@ -629,8 +623,51 @@ function selectPhase(p: Phase) {
 
 .run-stats {
   display: inline-flex;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+/* The run strip is a header, not a reading surface — its chips shrink with it
+   rather than holding the app-wide 16px floor. */
+.run-strip :deep(.stat) {
+  padding: 1px 9px;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.run-strip :deep(.chip) {
+  padding: 1px 10px;
+  gap: 5px;
+  font-size: 12px;
+}
+
+/* lucide sizes itself with width/height attributes; CSS wins over them. */
+.run-strip :deep(.stat-icon),
+.run-strip :deep(.chip-icon) {
+  width: 14px;
+  height: 14px;
+}
+
+/* Docked detail for the vertical layout: fixed to the right edge so it stays
+   put however far down the chart you have scrolled, and scrolls its own body. */
+.drawer {
+  position: fixed;
+  top: var(--topbar-h);
+  right: 0;
+  bottom: 0;
+  width: min(810px, 60vw);
+  z-index: 20;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: rgba(9, 13, 23, 0.97);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-left: 1px solid var(--border);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
+}
+
+.drawer :deep(.detail) {
+  margin: 14px;
 }
 
 .chart {

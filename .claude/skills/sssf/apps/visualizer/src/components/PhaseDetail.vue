@@ -392,7 +392,7 @@ function togglePanel(id: string) {
             <div v-if="agentConfig.coding_agent" class="cfg-row">
               <span class="cfg-k">coding agent</span>
               <span class="cfg-chip">
-                <SquareTerminal class="cfg-icon" :size="18" :stroke-width="2" />
+                <SquareTerminal class="cfg-icon" :size="14" :stroke-width="2" />
                 {{ agentConfig.coding_agent }}
               </span>
             </div>
@@ -406,7 +406,7 @@ function togglePanel(id: string) {
             <div v-if="agentConfig.thinking" class="cfg-row">
               <span class="cfg-k">thinking</span>
               <span class="cfg-chip">
-                <Brain class="cfg-icon" :size="18" :stroke-width="2" />
+                <Brain class="cfg-icon" :size="14" :stroke-width="2" />
                 {{ agentConfig.thinking }}
               </span>
             </div>
@@ -431,7 +431,7 @@ function togglePanel(id: string) {
             <div v-if="agentConfig.session_id" class="cfg-row">
               <span class="cfg-k">session</span>
               <span class="cfg-chip">
-                <Fingerprint class="cfg-icon" :size="18" :stroke-width="2" />
+                <Fingerprint class="cfg-icon" :size="14" :stroke-width="2" />
                 {{ agentConfig.session_id }}
               </span>
             </div>
@@ -614,7 +614,7 @@ function togglePanel(id: string) {
       </div>
 
       <div class="d-col">
-        <h3><Activity class="h3-icon" :size="19" :stroke-width="2" /> events ({{ phaseEvents.length }})</h3>
+        <h3><Activity class="h3-icon" :size="15" :stroke-width="2" /> events ({{ phaseEvents.length }})</h3>
         <div v-if="!phaseEvents.length" class="faint">no events</div>
         <div v-for="e in phaseEvents" :key="e.event_id" class="event">
           <button class="event-row" :class="{ open: expanded.has(e.event_id) }" @click="toggle(e)">
@@ -699,7 +699,7 @@ function togglePanel(id: string) {
 }
 
 .d-name {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -719,7 +719,7 @@ function togglePanel(id: string) {
   border: 1px solid var(--border-soft);
   border-radius: 999px;
   background: var(--panel-3);
-  font-size: 16px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -737,7 +737,7 @@ function togglePanel(id: string) {
   border-radius: 6px;
   color: var(--dim);
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   cursor: pointer;
   padding: 3px 10px;
 }
@@ -807,7 +807,7 @@ function togglePanel(id: string) {
   border-radius: 999px;
   background: rgba(19, 26, 38, 0.6);
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
@@ -840,7 +840,7 @@ h3 {
   margin: 18px 0 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--dim);
   text-transform: lowercase;
@@ -875,7 +875,7 @@ h3:first-child {
   background: none;
   border: none;
   color: var(--text);
-  font-size: 16px;
+  font-size: 13px;
   cursor: pointer;
   text-align: left;
 }
@@ -917,7 +917,7 @@ h3:first-child {
   background: none;
   color: var(--dim);
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -966,7 +966,7 @@ h3:first-child {
   background: none;
   border: none;
   color: var(--text);
-  font-size: 16px;
+  font-size: 13px;
   cursor: pointer;
   text-align: left;
 }
@@ -1056,12 +1056,12 @@ h3:first-child {
   width: 100%;
   max-width: 420px;
   border-collapse: collapse;
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .usage th {
   padding: 0 0 6px;
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 400;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1113,7 +1113,7 @@ h3:first-child {
 
 .u-note {
   margin: 10px 0 0;
-  font-size: 15px;
+  font-size: 12px;
 }
 
 /* ── outputs ── */
@@ -1165,7 +1165,7 @@ h3:first-child {
   border-radius: 6px;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   cursor: pointer;
   text-align: left;
 }
@@ -1216,12 +1216,12 @@ h3:first-child {
 .p-tool {
   color: var(--cyan);
   font-weight: 700;
-  font-size: 17px;
+  font-size: 14px;
 }
 
 .payload-panel h4 {
   margin: 14px 0 6px;
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--dim);
   text-transform: lowercase;

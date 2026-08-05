@@ -21,6 +21,9 @@
     'Roboto Mono', monospace;
   /* Surface gradient shared by cards and panels — one recipe, everywhere. */
   --surface: linear-gradient(180deg, #10141f 0%, #0b0f18 100%);
+  /* Fixed, because the vertical waterfall's sticky column headers park exactly
+     underneath it. Change it here and both move together. */
+  --topbar-h: 42px;
 }
 
 * {
@@ -64,7 +67,7 @@ pre {
   border-radius: 8px;
   overflow-x: auto;
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   line-height: 1.55;
   color: #cfdded;
   white-space: pre-wrap;
@@ -120,24 +123,24 @@ pre {
 /* Rendered-markdown blocks (compiled prompts) — global because the content is
    injected via v-html and scoped styles can't reach it. */
 .md {
-  font-size: 16px;
+  font-size: 13px;
   line-height: 1.6;
   color: var(--text);
 }
 
 .md h1 {
-  font-size: 20px;
+  font-size: 16px;
   margin: 14px 0 8px;
 }
 
 .md h2 {
-  font-size: 18px;
+  font-size: 14px;
   margin: 14px 0 8px;
 }
 
 .md h3,
 .md h4 {
-  font-size: 17px;
+  font-size: 14px;
   margin: 12px 0 6px;
 }
 
@@ -157,7 +160,7 @@ pre {
   border: 1px solid var(--border-soft);
   border-radius: 4px;
   padding: 1px 7px;
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .md pre.md-code {

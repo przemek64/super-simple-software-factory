@@ -1,9 +1,15 @@
 <script setup lang="ts">
+import { Columns3, Rows3 } from 'lucide-vue-next'
 import { useRoute, hrefFor, phaseCrumb } from './lib/router'
+import { layoutMode } from './lib/view'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
 
 const route = useRoute()
+
+function toggleLayout() {
+  layoutMode.value = layoutMode.value === 'vertical' ? 'horizontal' : 'vertical'
+}
 </script>
 
 <template>
@@ -31,7 +37,18 @@ const route = useRoute()
           <span class="current">{{ phaseCrumb ?? route.phaseId }}</span>
         </template>
       </nav>
-      <span class="live-hint"><span class="live-dot" /> live</span>
+      <span class="topbar-right">
+        <button
+          v-if="route.adwId"
+          class="layout-toggle"
+          :title="`Switch to ${layoutMode === 'vertical' ? 'horizontal' : 'vertical'} layout`"
+          @click="toggleLayout"
+        >
+          <component :is="layoutMode === 'vertical' ? Rows3 : Columns3" :size="16" :stroke-width="2" />
+          {{ layoutMode === 'vertical' ? 'horizontal' : 'vertical' }}
+        </button>
+        <span class="live-hint"><span class="live-dot" /> live</span>
+      </span>
     </header>
     <main>
       <SessionsList v-if="!route.adwId" />
@@ -45,7 +62,8 @@ const route = useRoute()
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 15px 28px;
+  height: var(--topbar-h);
+  padding: 0 20px;
   background: rgba(11, 15, 24, 0.72);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -73,14 +91,14 @@ const route = useRoute()
 .crumbs {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 17px;
+  gap: 8px;
+  font-size: 13px;
   min-width: 0;
 }
 
 .logo {
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 20px;
   flex: none;
   filter: drop-shadow(0 0 8px rgba(200, 155, 255, 0.35));
 }
@@ -111,18 +129,43 @@ const route = useRoute()
   color: var(--text);
 }
 
+.topbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.layout-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.layout-toggle:hover {
+  color: var(--text);
+  border-color: var(--dim);
+}
+
 .live-hint {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--dim);
-  font-size: 16px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .live-dot {
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--green);
   box-shadow: 0 0 10px rgba(74, 222, 128, 0.7);
