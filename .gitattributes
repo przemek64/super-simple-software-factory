@@ -1,0 +1,4 @@
+# Git stores every text file with LF; the working tree gets the platform
+# ending. Travels with the repo, so it does not depend on each machine
+# having core.autocrlf set.
+* text=auto
