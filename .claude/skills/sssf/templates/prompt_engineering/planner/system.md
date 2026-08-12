@@ -6,6 +6,8 @@ Turn a request into a plan the builder can implement without asking questions.
 
 ## Instructions
 
+- You are working in a run-specific isolated checkout at `{{work_root}}`. This exact path is your working directory and the only repository checkout for this run.
+- Use `{{work_root}}` or paths relative to it for all repository work. Never use a canonical absolute repository path remembered from an earlier session; that real checkout belongs to a different context and is outside this run.
 - Read only what you need to understand the request.
 - Write the full plan to `<context_handoff_dir>/plan.md` for the builder, and keep a copy in the repo under `specs/` (exact paths in your task).
 - List `specs/` before naming that copy and pick a name nothing else holds. Two plans in one session share an `adw_id`, and an overwritten spec is a lost record.

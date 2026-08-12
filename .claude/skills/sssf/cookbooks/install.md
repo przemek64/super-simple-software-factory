@@ -44,7 +44,7 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 
 ```bash
 just demo                                                    # both, end to end
-uv run adws/adw_prompt.py "reply with a one-line summary of this repo"   # the raw form
+uv run adws/adw_prompt.py "reply with a one-line summary of this repo" --base main   # the raw form
 ```
 
 Green means the whole path works: config validated, session minted, Pi ran, envelope parsed, events landed in `adws/adw_data/sssf.db`. Verify the trace exists before trusting anything larger:

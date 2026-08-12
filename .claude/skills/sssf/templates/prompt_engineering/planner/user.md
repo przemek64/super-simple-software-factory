@@ -14,6 +14,10 @@
 
 {{context_handoff_dir}}
 
+### work_root (run-specific isolated checkout and cwd)
+
+{{work_root}}
+
 ## Task
 
 Plan the work described in `prompt`.

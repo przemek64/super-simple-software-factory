@@ -21,8 +21,7 @@ from pathlib import Path
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 
 GITIGNORE_ENTRIES = [
-    "adws/adw_data/sessions/",
-    "adws/adw_data/sssf.db*",
+    "adws/adw_runtime/",
     ".env",
     # The ADWs are Python, so importing adw_modules writes bytecode next to it.
     # Chains that end in a commit phase call `git add -A`, so without this a
@@ -50,10 +49,11 @@ def stamp(src: Path, dest: Path, force: bool, stamped: list, skipped: list) -> N
 
 def ensure_gitignore(root: Path, stamped: list) -> None:
     gitignore = root / ".gitignore"
-    existing = gitignore.read_text().splitlines() if gitignore.exists() else []
+    existing = (gitignore.read_text(encoding="utf-8").splitlines()
+                if gitignore.exists() else [])
     missing = [e for e in GITIGNORE_ENTRIES if e not in existing]
     if missing:
-        with gitignore.open("a") as f:
+        with gitignore.open("a", encoding="utf-8") as f:
             f.write("\n# sssf runtime\n" + "\n".join(missing) + "\n")
         stamped.append(f"{gitignore} (+{len(missing)} entries)")
 
@@ -93,7 +93,7 @@ def main() -> int:
     print("  3. just sessions         # what just happened")
     print("  4. just obs              # the trace UI, needs bun")
     print("\n  no just? the raw form of step 2 is:")
-    print("     uv run adws/adw_prompt.py \"say hello\" --agent scout")
+    print("     uv run adws/adw_prompt.py \"say hello\" --agent scout --base main")
     return 0
 
 

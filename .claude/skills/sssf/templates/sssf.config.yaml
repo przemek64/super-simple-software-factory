@@ -22,15 +22,17 @@ defaults:
   # reaches any path. An agent must not be able to edit the machinery that
   # decides whether its own work passed. Enforced in adw_modules/permissions.py.
   #
-  # `writes:` per agent says what it may change IN THE REPO. It never restricts
-  # the session runtime under data_dir — context_handoff/, envelopes, prompts,
-  # raw output. Every agent can always write its own report; `writes: []` means
-  # read-only with respect to the repo, not mute.
+  # `writes:` per agent says what it may change IN THE WORKTREE. The only
+  # canonical write grant is this run's exact session subtree (context_handoff,
+  # envelopes, prompts, raw output); data_dir itself is never a broad grant.
   protected_files:
     - adws/adw_modules/
     - adws/adw_sssf_config/
     - adws/adw_*.py
-  data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
+  # Untracked runtime only. permissions.validate_data_dir refuses to start a run
+  # whose data_dir overlaps tracked/source files, so this must not be the
+  # adws/adw_data/ tree the installer stamps prompts and harness files into.
+  data_dir: adws/adw_runtime       # untracked runtime: {data_dir}/sessions/{adw_id}/{agent_name}/
   # The ONLY path outside the repo any agent may touch (adw_modules/permissions.py
   # guard_tool_paths — see the module docstring). Unset by default: every tool call
   # naming an absolute path outside the repo aborts the phase immediately. Uncomment
@@ -40,7 +42,7 @@ defaults:
   # worktree_root: ../{repo_name}-worktrees
 
 observability:
-  db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
+  db: adws/adw_runtime/sssf.db     # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
 agents:

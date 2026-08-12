@@ -274,7 +274,11 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     if on_spawn:
         on_spawn(process.pid)
     try:
-        with raw_path.open("a") as raw:
+        # UTF-8 explicitly: the pipe is already decoded as UTF-8, but on Windows
+        # an unqualified open() encodes as cp1252, and the first arrow or dash
+        # the model emits raises UnicodeEncodeError from inside the read loop —
+        # killing a phase that was otherwise working (fix_1, run afd2cc96).
+        with raw_path.open("a", encoding="utf-8", errors="replace") as raw:
             assert process.stdout is not None
             for line in process.stdout:
                 raw.write(line)

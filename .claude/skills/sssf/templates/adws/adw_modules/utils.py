@@ -52,12 +52,13 @@ def ensure_dir(path: str | Path) -> Path:
     return p
 
 
-def resolve_prompt(arg: str) -> str:
-    """CLI prompt arg: a file path resolves to its contents, else inline text."""
+def resolve_prompt(arg: str, *, cwd: Path) -> str:
+    """Resolve a CLI prompt file from the canonical checkout, else use inline text."""
     try:
-        p = Path(arg)
+        configured = Path(arg).expanduser()
+        p = configured if configured.is_absolute() else cwd / configured
         if p.is_file():
-            return p.read_text()
+            return p.read_text(encoding="utf-8")
     except OSError:
         pass
     return arg

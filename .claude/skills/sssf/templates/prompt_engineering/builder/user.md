@@ -14,6 +14,10 @@
 
 {{context_handoff_dir}}
 
+### work_root (run-specific isolated checkout and cwd)
+
+{{work_root}}
+
 ## Task
 
 Implement the work described in `prompt`, guided by `previous_envelope` if present, then emit your `Report` JSON.

@@ -13,7 +13,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import agents, git_helper
+from . import agents
 from .console import Console
 from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
 from .utils import ensure_dir, now_iso
@@ -40,7 +40,10 @@ class PhaseHandle:
 
 
 class Run:
-    def __init__(self, cfg, adw_id: str, tracer, engineer: str):
+    def __init__(self, cfg, adw_id: str, tracer, engineer: str, *,
+                 repo_root: Path, data_dir: Path, observability_db: Path,
+                 prompt: str = "", base_branch: str | None = None,
+                 recorded_checkout: tuple[str | None, str | None] | None = None):
         self.cfg = cfg
         self.adw_id = adw_id
         self.tracer = tracer
@@ -50,19 +53,53 @@ class Run:
         self.tokens = 0
         self.cost = 0.0
         self._seq = tracer.max_phase_seq(adw_id)   # a joined run continues the sequence
-        self.repo_root = git_helper.repo_root()    # where every agent is spawned to work
-        self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
+        # STATE root: the canonical checkout owns all durable run history.
+        # WORK root: agents, tests, specs, diffs, and git writes use the linked
+        # worktree. Keeping both names explicit prevents silent split-brain calls.
+        self.repo_root = repo_root
+        self.work_root = repo_root
+        self.data_dir = data_dir
+        self.observability_db = observability_db
+        self.session_dir = ensure_dir(self.data_dir / "sessions" / adw_id)
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
                                 if self._agent_map_path.exists() else {})
-        # `worktree_root` in config is a portable template (e.g. "../{repo_name}-worktrees"),
-        # not an absolute path — {repo_name} substitutes the actual checkout's folder
-        # name so the same config line works unchanged in every repo it's copied into.
+        # `worktree_root` is a portable path template rooted at the canonical repo.
         template = cfg.defaults.worktree_root
         self.worktree_root: Path | None = (
             (self.repo_root / template.replace("{repo_name}", self.repo_root.name)).resolve()
             if template else None)
+        self.base_branch = base_branch
+        self.branch: str | None = None
+        # Set only when isolation selects a checkout. The source records
+        # whether this initialization created artifacts it may roll back.
+        self.checkout = None
+        if cfg.defaults.worktree.enabled:
+            if not base_branch:
+                raise ValueError(
+                    "A Phase-A run requires --base <branch>. "
+                    "Issue-derived bases via --issue are not available until Phase B."
+                )
+            if self.worktree_root is None:
+                raise ValueError("Worktree isolation is enabled but worktree_root is not configured.")
+            # Local import avoids runner <-> worktree module initialization coupling.
+            from . import worktree
+            if recorded_checkout is not None and any(recorded_checkout):
+                recorded_branch, recorded_path = recorded_checkout
+                if not recorded_branch or not recorded_path:
+                    raise worktree.WorktreeError(
+                        f"Session {adw_id!r} has an incomplete recorded checkout identity: "
+                        f"branch={recorded_branch!r}, worktree_path={recorded_path!r}. "
+                        "Refusing to create a second worktree."
+                    )
+                self.branch = recorded_branch
+                self.checkout = worktree.reuse_recorded(self, recorded_path)
+            else:
+                self.branch = worktree.branch_name(prompt, adw_id,
+                                                   settings=cfg.defaults.worktree)
+                self.checkout = worktree.create(self, base_branch)
+            self.work_root = self.checkout.path
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:
@@ -106,7 +143,7 @@ class Run:
             self.tracer.session_finish(self.adw_id, ok=False)
             self.console.phase_ended(phase, time.monotonic() - clock)
             self.console.session_finished(False, self.tokens, self.cost,
-                                          self.cfg.observability.db)
+                                          self.observability_db)
             raise
         else:
             phase.status = "success"
@@ -145,5 +182,5 @@ class Run:
                 type="error", name="not_accepted", payload={"reason": note}))
             self.console.note(f"not accepted: {note}")
         self.tracer.session_finish(self.adw_id, ok=ok)
-        self.console.session_finished(ok, self.tokens, self.cost, self.cfg.observability.db)
+        self.console.session_finished(ok, self.tokens, self.cost, self.observability_db)
         return 0 if ok else 1

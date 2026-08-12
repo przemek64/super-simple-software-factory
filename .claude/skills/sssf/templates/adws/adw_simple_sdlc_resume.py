@@ -2,63 +2,50 @@
 # /// script
 # dependencies = ["pydantic", "python-dotenv", "pyyaml", "rich"]
 # ///
-"""ADW Simple SDLC — plan, build, test, review, document, committing as it goes.
+"""ADW Simple SDLC (resume) — the same chain, restarted where it stopped.
 
 Usage:
-    uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" --base <branch> [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
-    uv run adws/adw_simple_sdlc.py --issue <number> [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
+    uv run adws/adw_simple_sdlc_resume.py --adw-id a1b2c3d4 --issue 2
+    uv run adws/adw_simple_sdlc_resume.py --adw-id a1b2c3d4 "<prompt>" --base main
 
-Phases: engineer(request) -> planner -> git(commit_plan)
-        -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
-        -> reviewer [-> builder(revise) -> reviewer ... bounded]
-        -> code(retest, only if a revision changed code)
-        -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
-        -> code(deliver: push branch and open/reuse PR)
+Identical to adw_simple_sdlc.py in every phase, output and commit. The one
+difference: it requires an existing --adw-id, and skips the run's leading
+phases that already succeeded, restarting at the first that did not.
 
-Three commits, three work products, three authors. The plan, the code, and the
-write-up each land in their own commit, and each commit message is the words of
-the agent that produced it — `commit_message` on PlanOutput describes the spec,
-on BuildOutput the code, on DocumentOutput the write-up. No agent's sentence is
-ever reused for another agent's diff.
+Why a resume exists. A run that dies at `build` has already paid for `plan` —
+a full planner pass, real money, real minutes — and has already committed that
+plan to its branch. Re-running the whole ADW spends it again, and `commit_plan`
+then fails outright with "nothing to commit" because the identical spec is
+already on the branch. The work is not lost, only unreachable: the phases are
+in the tracer db and so are their envelopes.
 
-Testing is CODE, not an agent. `bun test` is a command, not a judgement call:
-an agent rediscovering it every run costs a million tokens to learn what a
-subprocess already knows. Failures travel back to the builder as an envelope,
-so the repair loop is unchanged — only the runner became free and repeatable.
+Where it stops skipping. At the FIRST phase that is not `success`, even if a
+later one succeeded. A phase that ran after a failure was computed against a
+tree that has since been repaired, so its green result is stale — reusing it
+would hand this run a review of code that no longer exists.
 
-Two different questions still get asked, in order. The suite asks "does it
-run"; the reviewer asks "is this what was asked for", against `plan.md` — and
-neither can answer the other's. A revision that closes a review finding
-re-enters the suite, so the tree that gets committed is the tree that was both
-tested and approved.
+What a skipped phase still provides. Its envelope, rehydrated from the db, so
+the phase that consumed it is unaffected: the builder receives the same
+PlanOutput the planner produced. A phase marked success whose envelope is
+missing is an error, not a shrug — see adw_modules/resume.py.
 
-The code commit lands after verification, not straight after the build: fixes
-and revisions are part of the same work product, and red code has no business
-on the branch. A run that fails verification therefore leaves the plan
-committed and the working tree dirty — the spec is a real artifact either way,
-and the unfinished code stays where the engineer can see it.
-
-The documenter measures against the commit this run STARTED from, not against
-`main`, because by then the run has moved `main` itself. That baseline is
-pinned before the first commit phase and printed in the request phase.
+The worktree, the branch and each agent's pi session are all keyed by adw_id
+and come back on their own, so a resumed builder continues with the context it
+had when it stopped.
 """
 
 import argparse
 import sys
 
 from adw_modules import (agents, changes, delivery, gates, git_helper,
-                         issue_ingestion, quality, session, utils)
+                         issue_ingestion, quality, resume, session, utils)
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
                                     DocumentOutput, PhaseParams, PlanOutput,
                                     ReviewOutput)
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
-# Three, not two: run cc634468 (issue #3) exhausted two loops sitting one test
-# case short of approval — the reviewer's last blocking item was a single named
-# rejection case. A third slot is the difference between landing that work and
-# throwing a 4.4M-token run away. Still bounded: the loop must end, and an
-# unapproved build is never committed.
+# Keep in step with adw_simple_sdlc.py — this ADW is identical in every phase.
 MAX_REVISION_LOOPS = 3
 
 DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the "
@@ -70,6 +57,10 @@ def main(prompt: str | None = None,
          config: str = "adws/adw_sssf_config/sssf.config.yaml",
          adw_id: str | None = None, base: str | None = None,
          issue_number: int | None = None) -> int:
+    if not adw_id:
+        raise ValueError(
+            "--adw-id is required: a resume continues a specific run. Use "
+            "adw_simple_sdlc.py to start a new one.")
     if (prompt is None) == (issue_number is None):
         raise ValueError("Provide exactly one request source: a prompt or --issue <number>.")
     if issue_number is not None and base is not None:
@@ -98,7 +89,27 @@ def main(prompt: str | None = None,
         prompt = utils.resolve_prompt(prompt, cwd=repo_root)  # type: ignore[arg-type]
     assert prompt is not None and base is not None
     run = session.ensure(cfg, adw_id, repo_root=repo_root, prompt=prompt, base=base)
-    baseline = git_helper.rev("HEAD", cwd=run.work_root)  # before run commits
+
+    # Read the prior run BEFORE any phase opens, so the skip set is the history
+    # as it stood, not as this process is about to rewrite it.
+    db_path = session.state_path(repo_root, cfg.observability.db)
+    already_done = resume.completed_prefix(db_path, adw_id)
+    if not already_done:
+        raise resume.ResumeError(
+            f"run {adw_id!r} has no successful leading phase to skip -- nothing "
+            f"to resume. Start it with adw_simple_sdlc.py.")
+    run.console.note(
+        f"resuming {adw_id}: skipping {len(already_done)} completed "
+        f"phase(s) -- {', '.join(already_done)}")
+
+    def done(phase_name: str) -> bool:
+        """True when this phase already succeeded in the run being resumed."""
+        return phase_name in already_done
+
+    # The baseline is what the ORIGINAL run measured against. On a resume the
+    # branch already carries that run's commits, so pinning HEAD now would make
+    # the documenter's diff exclude the plan commit this run is continuing.
+    baseline = git_helper.rev("HEAD", cwd=run.work_root)
 
     def commit(ph, envelope) -> None:
         """Commit what the preceding phase produced, in that agent's own words."""
@@ -111,24 +122,41 @@ def main(prompt: str | None = None,
         ph.log(passed=result.passed, checks=f"{passed}/{len(result.checks)}",
                artifacts=", ".join(result.artifacts))
 
-    with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
-                               description="Capture the incoming ask")) as ph:
-        ph.log(input=prompt, baseline=git_helper.short_sha(baseline, cwd=run.work_root))
+    if not done("request"):
+        with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
+                                   description="Capture the incoming ask")) as ph:
+            ph.log(input=prompt, baseline=git_helper.short_sha(baseline, cwd=run.work_root))
 
-    with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
-                               description="Turn the request into an implementable plan")) as ph:
-        plan = ph.call(AgentCall(output_type=PlanOutput, prompt=prompt,
-                                 gates=[gates.artifacts_exist, gates.files_non_empty]))
+    if done("plan"):
+        # The planner is the expensive phase and the reason this ADW exists.
+        plan = resume.rehydrate(db_path, adw_id, "plan", PlanOutput)
+    else:
+        with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
+                                   description="Turn the request into an implementable plan")) as ph:
+            plan = ph.call(AgentCall(output_type=PlanOutput, prompt=prompt,
+                                     gates=[gates.artifacts_exist, gates.files_non_empty]))
 
-    with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
-                               description="Put the spec on record before any code exists to blur it")) as ph:
-        commit(ph, plan)
+    # Skipping this is not an optimisation but a correctness requirement: the
+    # spec is already committed on the branch, and commit_all raises "nothing to
+    # commit" on an unchanged tree.
+    if not done("commit_plan"):
+        with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
+                                   description="Put the spec on record before any code exists to blur it")) as ph:
+            commit(ph, plan)
 
-    with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
-                               description="Implement the plan exactly")) as ph:
-        build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
-                                  gates=[gates.diff_matches_claims]))
+    if done("build"):
+        build = resume.rehydrate(db_path, adw_id, "build", BuildOutput)
+    else:
+        with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
+                                   description="Implement the plan exactly")) as ph:
+            build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
+                                      gates=[gates.diff_matches_claims]))
 
+    # Resume stops here. The loop phases (test_i / fix_i / review_i) always
+    # re-run, even if the prior run's rows say they passed. They are cheap
+    # relative to an agent phase, and their verdicts are only meaningful against
+    # the tree as it stands now -- a green suite recorded before the build was
+    # repaired says nothing about the build that exists today.
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
@@ -179,9 +207,13 @@ def main(prompt: str | None = None,
     verified = (test is not None and test.passed
                 and review is not None and review.approved)
     if verified:
-        with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
-                                   description="Land the code only now: green suite, approved review")) as ph:
-            commit(ph, build)
+        # Same reason commit_plan is guarded: the code is already on the branch
+        # from the run being resumed, and commit_all raises "nothing to commit"
+        # on an unchanged tree.
+        if not done("commit_build"):
+            with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
+                                       description="Land the code only now: green suite, approved review")) as ph:
+                commit(ph, build)
 
         with run.phase(PhaseParams(name="changes", kind="code", owner="git",
                                    description="Diff the whole run against its pinned baseline, for the documenter")) as ph:
@@ -229,7 +261,8 @@ if __name__ == "__main__":
     parser.add_argument("--issue", type=int, default=None,
                         help="GitHub issue number to use instead of a prompt")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
-    parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--adw-id", required=True,
+                        help="the run to resume (required — this ADW never starts a new one)")
     parser.add_argument("--base", default=None,
                         help="remote base branch (required for a free prompt; forbidden with --issue)")
     args = parser.parse_args()

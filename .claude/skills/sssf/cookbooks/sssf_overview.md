@@ -58,8 +58,8 @@ Agents have exactly two output channels: reference files written into `context_h
 ## Running an ADW
 
 ```bash
-uv run adws/adw_plan.py "add a /health endpoint"
-uv run adws/adw_plan_build.py requests/health.md --adw-id a1b2c3d4
+uv run adws/adw_plan.py "add a /health endpoint" --base main
+uv run adws/adw_plan_build.py requests/health.md --base main --adw-id a1b2c3d4
 ```
 
 The prompt is inline text or a file path. `--adw-id` is optional on every ADW: given one, the run joins that session (same dirs, same `context_handoff/`, agents resume their existing context windows); omitted, a fresh id is minted and printed.

@@ -5,7 +5,7 @@
 """ADW Plan Build — two-agent chain: planner -> envelope -> builder.
 
 Usage:
-    uv run adws/adw_plan_build.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
+    uv run adws/adw_plan_build.py "<prompt or path/to/prompt.md>" --base <branch> [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
 Phases: engineer(request) -> planner -> builder -> git(commit)
 """
@@ -13,16 +13,18 @@ Phases: engineer(request) -> planner -> builder -> git(commit)
 import argparse
 import sys
 
-from adw_modules import agents, gates, git_helper, session, utils
+from adw_modules import gates, git_helper, session, utils
 from adw_modules.data_types import AgentCall, BuildOutput, PhaseParams, PlanOutput
 
 REQUIRED_AGENTS = ["planner", "builder"]
 
 
-def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
-    cfg = agents.load_config(config)
-    agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
+         adw_id: str | None = None, base: str | None = None) -> int:
+    base = session.require_phase_a_base(base)
+    cfg, repo_root = session.bootstrap(config, REQUIRED_AGENTS)
+    prompt = utils.resolve_prompt(prompt, cwd=repo_root)
+    run = session.ensure(cfg, adw_id, repo_root=repo_root, prompt=prompt, base=base)
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
@@ -41,7 +43,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                description="Land the builder's changes, using the message it wrote")) as ph:
         message = build.commit_message or f"sssf({run.adw_id}): {build.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        ph.log(sha=git_helper.commit_all(message, cwd=run.work_root), message=message)
 
     return run.finish()
 
@@ -51,5 +53,6 @@ if __name__ == "__main__":
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--base", required=True, help="required remote base branch for the isolated run")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))
+    sys.exit(main(args.prompt, args.config, args.adw_id, args.base))

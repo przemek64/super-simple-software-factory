@@ -11,7 +11,7 @@ set positional-arguments
 # Every recipe passes this through, so `SSSF_CONFIG=other.yaml just sdlc "..."`
 # swaps the whole roster for one run.
 config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.yaml")
-db     := "adws/adw_data/sssf.db"
+db     := "adws/adw_runtime/sssf.db"
 
 # list every recipe
 default:
@@ -28,9 +28,9 @@ default:
 # start here: two cheap read-only runs, end to end
 demo:
     @echo "1/2  adw_prompt: one agent, one prompt"
-    uv run adws/adw_prompt.py --config {{config}} --agent scout "reply with a one-line summary of this repo"
+    uv run adws/adw_prompt.py --config {{config}} --agent scout --base main "reply with a one-line summary of this repo"
     @echo "\n2/2  adw_scout: read-only recon"
-    uv run adws/adw_scout.py --config {{config}} "list the top-level directories in this repo and what each is for. change nothing."
+    uv run adws/adw_scout.py --config {{config}} --base main "list the top-level directories in this repo and what each is for. change nothing."
     @echo "\nboth done. now run:  just sessions    (or: just obs)"
 
 # ── run a workflow ──────────────────────────────────────────────────────────

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from .data_types import AgentConfig, EventRecord, GateReport, Phase
 from .utils import ensure_dir, new_id, now_iso
@@ -23,6 +25,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
   total_tokens  INTEGER DEFAULT 0, total_cost REAL DEFAULT 0,
+  branch        TEXT,
+  worktree_path TEXT,
+  base_branch   TEXT,
   archived      INTEGER DEFAULT 0   -- review triage, set by the UI; never by a run
 );
 CREATE TABLE IF NOT EXISTS phases (
@@ -96,7 +101,10 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "adw_name", "TEXT"),
               ("agent_sessions", "context_tokens", "INTEGER"),
               ("agent_sessions", "context_window", "INTEGER"),
-              ("sessions", "archived", "INTEGER DEFAULT 0")]
+              ("sessions", "archived", "INTEGER DEFAULT 0"),
+              ("sessions", "branch", "TEXT"),
+              ("sessions", "worktree_path", "TEXT"),
+              ("sessions", "base_branch", "TEXT")]
 
 
 class Tracer:
@@ -108,7 +116,10 @@ class Tracer:
         self.conn = sqlite3.connect(self.db_path, isolation_level=None)
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
-        self.conn.execute("PRAGMA busy_timeout=5000;")
+        # Checkout initialization may deliberately hold a write transaction
+        # while git creates a worktree. Concurrent entry processes must wait
+        # for that identity decision rather than time out and race it.
+        self.conn.execute("PRAGMA busy_timeout=60000;")
         self.conn.executescript(SCHEMA)
         self._migrate()
 
@@ -136,11 +147,72 @@ class Tracer:
         return event_id
 
     # ── sessions ────────────────────────────────────────────────────────────
-    def session_start(self, adw_id: str, engineer: str, adw_name: str | None = None) -> None:
+    @contextmanager
+    def serialize_checkout_initialization(self) -> Iterator[None]:
+        """Serialize checkout identity selection across entry processes.
+
+        The transaction stays open from the first identity lookup through
+        worktree creation and ``session_start``. A same-ID contender therefore
+        sees either no identity or the completed winner's identity, never the
+        unrecorded gap between worktree creation and the database write.
+        Rollback releases the reservation when initialization fails.
+        """
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+        else:
+            try:
+                self.conn.execute("COMMIT")
+            except BaseException:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+
+    def session_checkout(
+        self, adw_id: str,
+    ) -> tuple[str | None, str | None, str | None] | None:
+        """Return the branch, worktree path, and base recorded for a session."""
+        row = self.conn.execute(
+            "SELECT branch, worktree_path, base_branch FROM sessions WHERE adw_id=?",
+            (adw_id,),
+        ).fetchone()
+        return (row[0], row[1], row[2]) if row else None
+
+    def session_start(self, adw_id: str, engineer: str, adw_name: str | None = None,
+                      branch: str | None = None,
+                      worktree_path: str | None = None,
+                      base_branch: str | None = None) -> None:
+        # Never let ON CONFLICT conceal split-brain. A joined session must use
+        # the identity loaded before worktree creation, and this final check
+        # also catches a concurrent creator that won the race.
+        existing = self.session_checkout(adw_id)
+        if existing is not None:
+            conflicts = [
+                f"{name}: recorded {recorded!r}, requested {requested!r}"
+                for name, recorded, requested in (
+                    ("branch", existing[0], branch),
+                    ("worktree_path", existing[1], worktree_path),
+                    ("base_branch", existing[2], base_branch),
+                )
+                if recorded is not None and recorded != requested
+            ]
+            if conflicts:
+                raise RuntimeError(
+                    f"Session {adw_id!r} checkout identity mismatch; " + "; ".join(conflicts)
+                )
+        # COALESCE populates migrated legacy rows once without replacing an
+        # identity already recorded by an earlier entry path.
         self.conn.execute(
-            "INSERT INTO sessions (adw_id, status, engineer, started_at) VALUES (?,?,?,?) "
-            "ON CONFLICT(adw_id) DO UPDATE SET status='running'",
-            (adw_id, "running", engineer, now_iso()),
+            "INSERT INTO sessions (adw_id, status, engineer, started_at, branch, "
+            "worktree_path, base_branch) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(adw_id) DO UPDATE SET status='running', "
+            "branch=COALESCE(sessions.branch, excluded.branch), "
+            "worktree_path=COALESCE(sessions.worktree_path, excluded.worktree_path), "
+            "base_branch=COALESCE(sessions.base_branch, excluded.base_branch)",
+            (adw_id, "running", engineer, now_iso(), branch, worktree_path, base_branch),
         )
         if not adw_name:
             return

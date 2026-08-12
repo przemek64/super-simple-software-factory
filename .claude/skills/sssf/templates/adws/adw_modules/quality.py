@@ -59,6 +59,15 @@ def _check_dir(run, name: str) -> Path:
     return path
 
 
+def _as_text(captured: str | bytes | None) -> str:
+    """Normalize a captured stream that may be absent, or bytes on a timeout."""
+    if captured is None:
+        return ""
+    if isinstance(captured, bytes):
+        return captured.decode("utf-8", errors="replace")
+    return captured
+
+
 def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     phase = run.phases[-1]
     output_dir = _check_dir(run, spec.name)
@@ -74,19 +83,25 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     try:
         completed = subprocess.run(
             spec.argv,
-            cwd=spec.cwd or run.repo_root,
+            cwd=spec.cwd or run.work_root,
             env=env,
             capture_output=True,
             text=True,
+            # A quality command reports on whatever the repo contains, and this
+            # repo contains raw ESC/POS bytes. Decoding its output as the
+            # Windows default killed the reader thread on byte 0x90, which
+            # surfaces as stdout=None and a TypeError three frames later --
+            # never as the test failure the operator was trying to read.
+            encoding="utf-8", errors="replace",
             timeout=spec.timeout_seconds,
         )
         returncode = completed.returncode
-        stdout = completed.stdout
-        stderr = completed.stderr
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
     except subprocess.TimeoutExpired as error:
         returncode = 124
-        stdout = error.stdout or ""
-        stderr = (error.stderr or "") + f"\nTimed out after {spec.timeout_seconds}s."
+        stdout = _as_text(error.stdout)
+        stderr = _as_text(error.stderr) + f"\nTimed out after {spec.timeout_seconds}s."
     except OSError as error:
         # A missing binary lands here as exit 127 with the real message — no
         # pre-flight probe needed, and none wanted.
@@ -96,7 +111,8 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     duration = time.monotonic() - clock
     output_artifact.write_text(
         f"$ {command}\nexit: {returncode}\nduration_seconds: {duration:.3f}\n"
-        f"\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
+        f"\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n",
+        encoding="utf-8", errors="replace",
     )
     passed = returncode == 0
     run.tracer.event(EventRecord(
@@ -141,7 +157,14 @@ def test(run) -> QualityCheckResult:
         name="test",
         area="backend",
         operation="build",
-        argv=_placeholder("test"),        # e.g. ["bun", "test"] or ["uv", "run", "pytest", "-q"]
+        # --ignore=adws: SSSF's own adw_*_test.py scripts match pytest's default
+        # `*_test.py` collection pattern and would otherwise be imported as tests.
+        # The suite imports factory modules directly. Declare the same runtime
+        # dependencies as the PEP-723 ADW scripts so a fresh worktree needs no
+        # venv or bootstrap step.
+        argv=["uv", "run", "--with", "pytest", "--with", "pydantic",
+              "--with", "python-dotenv", "--with", "pyyaml", "--with", "rich",
+              "pytest", "-q", "--ignore=adws"],
         timeout_seconds=600,
     ), run)
 

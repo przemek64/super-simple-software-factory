@@ -141,7 +141,7 @@ adws/adw_data/sessions/{adw_id}/
     └── envelope.json       the final valid-JSON response — captured, validated, persisted by code
 ```
 
-`session.ensure(cfg, adw_id)` mints or joins the id and creates these dirs. One `context_handoff/` per session, shared by every agent — the single location for cross-agent files.
+`session.ensure(cfg, adw_id, repo_root=..., prompt=..., base=...)` mints or joins the id and creates these dirs. One `context_handoff/` per session, shared by every agent — the single location for cross-agent files.
 
 ## agent_map.json and resuming
 

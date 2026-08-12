@@ -14,6 +14,10 @@
 
 {{context_handoff_dir}}
 
+### work_root (run-specific isolated checkout and cwd)
+
+{{work_root}}
+
 ## Task
 
 Find what `prompt` asks about. Write findings into `context_handoff_dir`, then emit your `Report` JSON.

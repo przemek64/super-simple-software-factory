@@ -5,7 +5,7 @@
 """ADW Document — write up the work that was just done, from the diff.
 
 Usage:
-    uv run adws/adw_document.py "<prompt or path/to/prompt.md>" [--base main] [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
+    uv run adws/adw_document.py "<prompt or path/to/prompt.md>" --base <branch> [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
 Phases: engineer(request) -> code(changes) -> documenter
 
@@ -14,7 +14,7 @@ change capture is a code phase, and an empty diff raises there — before the
 documenter is ever spawned. There is nothing to document until something was
 built, and the phase says so instead of paying an agent to discover it.
 
-`git diff` against `--base` (main by default) is what "the latest changes"
+`git diff` against the required `--base` is what "the latest changes"
 means here; see adw_modules/changes.py for how the base commit is resolved on a
 branch, on main, and on a clean tree right after a chain committed.
 """
@@ -22,7 +22,7 @@ branch, on main, and on a clean tree right after a chain committed.
 import argparse
 import sys
 
-from adw_modules import agents, changes, gates, session, utils
+from adw_modules import changes, gates, session, utils
 from adw_modules.data_types import (AgentCall, ChangeCapture, DocumentOutput,
                                     PhaseParams)
 
@@ -33,11 +33,12 @@ DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the
                   "describes.")
 
 
-def main(prompt: str, base: str = "main",
+def main(prompt: str, base: str | None = None,
          config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
-    cfg = agents.load_config(config)
-    agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+    base = session.require_phase_a_base(base)
+    cfg, repo_root = session.bootstrap(config, REQUIRED_AGENTS)
+    prompt = utils.resolve_prompt(prompt, cwd=repo_root)
+    run = session.ensure(cfg, adw_id, repo_root=repo_root, prompt=prompt, base=base)
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
@@ -60,7 +61,8 @@ def main(prompt: str, base: str = "main",
     with run.phase(PhaseParams(name="document", kind="agent", owner="documenter", retries=1,
                                description="Turn the captured diff into a write-up an engineer can read")) as ph:
         ph.call(AgentCall(output_type=DocumentOutput, prompt=prompt,
-                          previous=changes.as_envelope(changeset, DOCUMENT_NOTES),
+                          previous=changes.as_envelope(
+                              changeset, DOCUMENT_NOTES, cwd=run.work_root),
                           gates=[gates.artifacts_exist, gates.files_non_empty]))
 
     return run.finish()
@@ -69,8 +71,8 @@ def main(prompt: str, base: str = "main",
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
-    parser.add_argument("--base", default="main", help="ref the change is measured against")
+    parser.add_argument("--base", required=True, help="required remote base branch and diff target")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.base, args.config, args.adw_id))
+    sys.exit(main(args.prompt, args.base, args.config, args.adw_id))

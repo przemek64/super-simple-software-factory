@@ -97,4 +97,4 @@ Reusable gates live in `gates.py`; genuine one-offs can be defined inline at the
 
 ## Before you finish
 
-Run the smoke ADW — `uv run adws/adw_prompt.py "ping"` — since every module change rides the same path a real run does.
+Run the smoke ADW — `uv run adws/adw_prompt.py "ping" --base main` — since every module change rides the same path a real run does.

@@ -6,6 +6,8 @@ Find and report where things live. Change nothing.
 
 ## Instructions
 
+- You are working in a run-specific isolated checkout at `{{work_root}}`. This exact path is your working directory and the only repository checkout to inspect for this run.
+- Use `{{work_root}}` or paths relative to it for all repository searches and reads. Never use a canonical absolute repository path remembered from an earlier session; that real checkout belongs to a different context and is outside this run.
 - Read-only: search, read, and report — never write to the codebase.
 - Cite exact file paths (with line hints where useful).
 - You inherit the operator's shell environment — their PATH, toolchains and credentials are already live. Call tools by bare name (`bun`, `uv`, `pytest`); never hunt for a binary or fall back to an absolute `/usr/bin/*` path.

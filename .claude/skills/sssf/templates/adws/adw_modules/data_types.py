@@ -120,6 +120,30 @@ class ReviewOutput(EnvelopeBase):
     blocking: list[str] = Field(default_factory=list)   # what must change before approval
 
 
+class TriageVerdict(BaseModel):
+    """One ruling on one CodeRabbit finding: act on it, or say why not.
+
+    Rejection is a first-class outcome. CodeRabbit produces findings that are
+    wrong, out of scope, or already decided against, and a loop whose only
+    accepted answer is "fixed" forces bad suggestions into the codebase and
+    teaches the builder to fake compliance to clear the gate.
+    """
+
+    finding_id: str                 # RabbitFinding.finding_id — the id being ruled on
+    accepted: bool
+    reason: str = ""                # REQUIRED in practice on a rejection; see triage_complete
+
+
+class TriageOutput(EnvelopeBase):
+    """Which findings the fix run is contracted to repair, and which it declines."""
+
+    verdicts: list[TriageVerdict] = Field(default_factory=list)
+
+    @property
+    def accepted_ids(self) -> list[str]:
+        return [v.finding_id for v in self.verdicts if v.accepted]
+
+
 class DocumentOutput(EnvelopeBase):
     """Where the write-up of a completed change landed."""
 
@@ -142,7 +166,7 @@ class QualityCheckSpec(BaseModel):
     operation: QualityOperation
     argv: list[str]
     timeout_seconds: int = 120
-    cwd: Optional[str] = None       # overrides run.repo_root, e.g. for an app repo the builder targets
+    cwd: Optional[str] = None       # overrides run.work_root for a specific quality block
 
 
 class QualityCheckResult(BaseModel):
@@ -323,6 +347,29 @@ class AgentConfig(BaseModel):
     writes: Optional[list[str]] = None
 
 
+class WorktreeConfig(BaseModel):
+    """Decision settings shared by worktree naming and base resolution."""
+
+    enabled: bool = False
+    branch_prefix: str = "sssf/"
+    copy_files: list[str] = Field(default_factory=list)
+    target_label_prefix: str = "target: "
+    target_branch_map: dict[str, str] = Field(default_factory=lambda: {
+        "main": "main",
+        "*": "feat/{target}",
+    })
+
+
+class PermissionGuardConfig(BaseModel):
+    """Hard bounds for one guarded agent execution."""
+
+    max_files: int = Field(default=100_000, ge=1)
+    max_bytes: int = Field(default=1_073_741_824, ge=1)
+    max_worktrees: int = Field(default=32, ge=1)
+    max_seconds: float = Field(default=120.0, gt=0)
+    lock_timeout_seconds: float = Field(default=120.0, gt=0)
+
+
 class ConfigDefaults(BaseModel):
     coding_agent: Literal["pi", "claude_code"] = "pi"
     model: str = "google/gemini-3.6-flash"
@@ -336,15 +383,16 @@ class ConfigDefaults(BaseModel):
     protected_files: list[str] = Field(default_factory=lambda: [
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])
-    data_dir: str = "adws/adw_data"
-    # The ONLY path outside repo_root any agent may touch (permissions.guard_tool_paths).
-    # A fixed, pre-created directory rather than letting a builder pick its own
-    # worktree location — no path is trusted just because the agent chose it itself.
+    data_dir: str = "adws/adw_runtime"
+    # Parent directory for factory-created worktrees. Agents are granted only
+    # their run's work_root, never this whole parent or another run's tree.
     worktree_root: Optional[str] = None
+    worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
+    permission_guard: PermissionGuardConfig = Field(default_factory=PermissionGuardConfig)
 
 
 class ObservabilityConfig(BaseModel):
-    db: str = "adws/adw_data/sssf.db"
+    db: str = "adws/adw_runtime/sssf.db"
     poll_ms: int = 500
 
 
@@ -387,7 +435,7 @@ class PiRequest(BaseModel):
     raw_output_path: str            # JSONL stream lands here
     tools: Optional[list[str]] = None
     extensions: list[str] = Field(default_factory=list)
-    cwd: str = "."                  # set from run.repo_root — the codebase root agents work in
+    cwd: str = "."                  # set from run.work_root — the isolated codebase root
 
 
 class UsageBreakdown(BaseModel):

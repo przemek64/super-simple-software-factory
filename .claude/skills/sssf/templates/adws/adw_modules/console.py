@@ -8,6 +8,8 @@ so a CI log reads exactly like a terminal.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.console import Console as RichConsole
 from rich.markup import escape
 from rich.panel import Panel
@@ -50,7 +52,8 @@ class Console:
         self._emit(f"[bold cyan]adw_id:[/bold cyan] [bold]{escape(adw_id)}[/bold]"
                    f"   [dim]engineer[/dim] {escape(engineer)}")
 
-    def session_finished(self, ok: bool, tokens: int, cost: float, db_path: str) -> None:
+    def session_finished(self, ok: bool, tokens: int, cost: float,
+                         db_path: str | Path) -> None:
         if self._finished:
             return
         self._finished = True

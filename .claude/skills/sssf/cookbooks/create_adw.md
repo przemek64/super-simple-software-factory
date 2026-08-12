@@ -61,16 +61,19 @@ Every `adw_*.py`, generated or hand-written, is a `uv` single-file script with t
 import argparse
 import sys
 
-from adw_modules import agents, gates, git_helper, session, utils
+from adw_modules import gates, git_helper, session, utils
 from adw_modules.data_types import AgentCall, BuildOutput, PhaseParams, PlanOutput
 
 REQUIRED_AGENTS = ["planner", "builder"]        # names, never models
 
 
-def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
-    cfg = agents.load_config(config)            # 1. point to config
-    agents.validate(cfg, REQUIRED_AGENTS)       # 2. fail fast — nothing spawns on a half-valid config
-    run = session.ensure(cfg, adw_id)           # 3. pin-or-create the session → the Run object
+def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
+         adw_id: str | None = None, base: str | None = None) -> int:
+    base = session.require_phase_a_base(base)                    # 1. no run without a base branch
+    cfg, repo_root = session.bootstrap(config, REQUIRED_AGENTS)  # 2. resolve the checkout, load + validate config
+    prompt = utils.resolve_prompt(prompt, cwd=repo_root)         # 3. a prompt path is relative to the checkout
+    run = session.ensure(cfg, adw_id, repo_root=repo_root,       # 4. pin-or-create the session AND its worktree
+                         prompt=prompt, base=base)
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
@@ -89,7 +92,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                description="Commit the working tree")) as ph:
         message = build.commit_message or f"sssf({run.adw_id}): {build.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        ph.log(sha=git_helper.commit_all(message, cwd=run.work_root), message=message)
 
     return run.finish()
 
@@ -99,8 +102,9 @@ if __name__ == "__main__":
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--base", required=True, help="required remote base branch for the isolated run")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))
+    sys.exit(main(args.prompt, args.config, args.adw_id, args.base))
 ```
 
 ## Non-negotiables
@@ -115,6 +119,6 @@ if __name__ == "__main__":
 
 ## Before you ship it
 
-1. `uv run adws/adw_<name>.py "a tiny real request"` — watch it go green end to end.
+1. `uv run adws/adw_<name>.py "a tiny real request" --base main` — watch it go green end to end.
 2. Check the trace: `sqlite3 adws/adw_data/sssf.db "select seq,name,kind,owner,status from phases where adw_id='<id>' order by seq;"`
 3. Read the final `envelope.json` — is the output type earning its fields, or should it be sharper?
