@@ -1,5 +1,13 @@
 # sssf.config.yaml — the factory's agent roster. One agent, one prompt, one purpose.
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
+#
+# THE ROSTER BELOW IS AN ILLUSTRATION, NOT A WORKING SET. Every model line is
+# `provider/id`, and the provider must be one your pi install is actually
+# authenticated for — the names here show the shape (a strong reasoner plans and
+# reviews, a cheaper model scouts) rather than models you are certain to have.
+# Run `pi --list-models` and replace them before your first run; validation
+# stops the run and names any model it cannot find, so nothing spawns against a
+# provider you do not have.
 defaults:
   coding_agent: pi
   model: google/gemini-3.6-flash   # provider/id — a bare pattern is ambiguous across providers
@@ -33,13 +41,36 @@ defaults:
   # whose data_dir overlaps tracked/source files, so this must not be the
   # adws/adw_data/ tree the installer stamps prompts and harness files into.
   data_dir: adws/adw_runtime       # untracked runtime: {data_dir}/sessions/{adw_id}/{agent_name}/
-  # The ONLY path outside the repo any agent may touch (adw_modules/permissions.py
-  # guard_tool_paths — see the module docstring). Unset by default: every tool call
-  # naming an absolute path outside the repo aborts the phase immediately. Uncomment
-  # to allow one extra directory, e.g. for a builder that legitimately needs a git
-  # worktree of a separate app repo. {repo_name} substitutes this checkout's own
-  # folder name at runtime, so the line is portable across repos unmodified.
-  # worktree_root: ../{repo_name}-worktrees
+  # Where this repo's run worktrees live. Fixed and pre-created — never a path
+  # an agent picks for itself. {repo_name} substitutes the checkout's own folder
+  # name at runtime (runner.py Run.__init__), so the line is portable across
+  # repos unmodified. Resolved relative to the checkout, so the default puts the
+  # trees in a sibling directory: ../<repo>-worktrees/.
+  #
+  # It is also the ONLY path outside the repo any agent may touch
+  # (adw_modules/permissions.py guard_tool_paths). The grant is this run's own
+  # tree, not the whole root — one run cannot write into another's.
+  worktree_root: ../{repo_name}-worktrees
+  worktree:
+    enabled: true                  # every run works in its own checkout; set false to run in-place
+    branch_prefix: sssf/           # every run branch is named sssf/<something>
+    copy_files:                    # untracked files a fresh worktree still needs
+      - .env
+    # Only used by issue-derived runs (adw_modules/issue_ingestion.py): an issue
+    # labelled "target: main" lands on main, anything else on feat/<target>.
+    target_label_prefix: "target: "
+    target_branch_map:
+      main: main
+      "*": feat/{target}
+  # Fail closed before spawning the agent if a complete, restorable baseline
+  # cannot be established within these bounds. They guard against an unbounded
+  # walk, not against repo size — raise max_bytes if a large checkout trips it.
+  permission_guard:
+    max_files: 100000
+    max_bytes: 1073741824          # 1 GiB
+    max_worktrees: 32
+    max_seconds: 120
+    lock_timeout_seconds: 120
 
 observability:
   db: adws/adw_runtime/sssf.db     # tracer writes here directly; the UI polls it
@@ -129,6 +160,26 @@ agents:
       - ls
       - bash
       - write
+
+  # Required by adws/adw_coderabbit.py, which triages a CodeRabbit review before
+  # the builder touches anything.
+  - name: triager
+    model: openai/gpt-5.6-terra
+    thinking: high
+    color: "#38bdf8"
+    purpose: Decide which CodeRabbit findings are real before any code is touched.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/triager/system.md
+      user: adws/adw_data/prompt_engineering/triager/user.md
+    writes: []                     # judgement only. A triager that could edit could
+                                   # "fix" a finding instead of ruling on it, and the
+                                   # builder would then be handed a decision already acted on.
+    tools:                         # full read surface; it rules on findings, it does not repair them
+      - read
+      - grep
+      - find
+      - ls
+      - bash
 
   - name: documenter
     model: openai/gpt-5.6-luna

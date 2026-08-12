@@ -158,3 +158,10 @@ sssf.db*
 apps/inkwell/inkwell.db*
 
 *.mov
+
+# ─── Local-only factory install (never ships) ──────────────
+# The tracked skill stamps an illustrative roster, because it installs into
+# repos whose model providers we cannot know. These two carry THIS machine's
+# authenticated roster, so they stay out of the fork entirely.
+.claude/skills/sssf/scripts/install_local.py
+.claude/skills/sssf/templates/sssf.config.local.yaml
