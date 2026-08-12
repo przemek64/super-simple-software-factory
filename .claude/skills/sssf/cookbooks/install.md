@@ -22,8 +22,9 @@ Run from the **target repo root** — the cwd is where everything lands. If the 
 | `adws/adw_modules/` | `templates/adws/adw_modules/` | yes — all low-level logic |
 | `adws/adw_data/prompt_engineering/{planner,builder,scout,reviewer,documenter}/` | `templates/prompt_engineering/` | yes — **the user-owned home for prompts** |
 | `adws/adw_data/harness_engineering/` | `templates/harness_engineering/` | yes — **the user-owned home for pi extensions** |
+| `adws/adw_visualizer/` | `apps/visualizer/` | yes — the trace UI `just obs` boots (its `node_modules/` is `bun install`'s, and gitignored) |
 | `justfile` | `templates/justfile` | yes — starter recipes: `just demo`, the workflows, the trace reads, `just obs` |
-| `adws/adw_data/sessions/`, `adws/adw_data/sssf.db` | created at runtime | no — gitignored |
+| `adws/adw_runtime/sessions/`, `adws/adw_runtime/sssf.db` | created at runtime | no — gitignored |
 
 The two `*_engineering` dirs mirror the two config keys of the same name: `prompt_engineering` is what an agent is told, `harness_engineering` is what its harness can do. Both are yours the moment they are stamped. Edit them in `adws/adw_data/`, never back inside the skill.
 
@@ -38,7 +39,7 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 1. **Env** — `cp .env.sample .env`, then set `OPENROUTER_API_KEY` in `.env`. (v1 runs Pi; `ANTHROPIC_API_KEY` / `CLAUDE_CODE_PATH` are only needed once Claude Code lands in v2.)
 2. **Pi is installed and on PATH** — `pi --version`. Set `PI_PATH` in `.env` if it is not.
 3. **The model resolves** — the config's default `gemini-3.6-flash` must be a registered id in `~/.pi/agent/models.json`. Check with `pi --list-models` or read the file directly; see `references/config.md` for model resolution.
-4. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, and `.env` for you; confirm they landed. All three are runtime or secrets and must never be committed.
+4. **Gitignore** — `install.py` appends `adws/adw_runtime/`, `.env`, `__pycache__/`, `*.pyc`, and `adws/adw_visualizer/node_modules/` for you; confirm they landed. All of them are runtime, build output, or secrets, and none must ever be committed.
 5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
 6. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
 
@@ -47,10 +48,10 @@ just demo                                                    # both, end to end
 uv run adws/adw_prompt.py "reply with a one-line summary of this repo" --base main   # the raw form
 ```
 
-Green means the whole path works: config validated, session minted, Pi ran, envelope parsed, events landed in `adws/adw_data/sssf.db`. Verify the trace exists before trusting anything larger:
+Green means the whole path works: config validated, session minted, Pi ran, envelope parsed, events landed in `adws/adw_runtime/sssf.db`. Verify the trace exists before trusting anything larger:
 
 ```bash
-sqlite3 adws/adw_data/sssf.db "select adw_id, status from sessions order by started_at desc limit 1;"
+sqlite3 adws/adw_runtime/sssf.db "select adw_id, status from sessions order by started_at desc limit 1;"
 ```
 
 If the smoke test fails, fix it before composing chains — every multi-agent ADW rides on this exact path.

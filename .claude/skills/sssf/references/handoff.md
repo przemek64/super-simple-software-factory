@@ -131,7 +131,7 @@ The `## Report` section shows the exact JSON shape of the declared output type �
 ## Session directory layout
 
 ```
-adws/adw_data/sessions/{adw_id}/
+adws/adw_runtime/sessions/{adw_id}/
 ├── agent_map.json          agent name → coding-agent session_id + model
 ├── context_handoff/        the ONE place agents write files for the agents that follow
 └── {agent_name}/

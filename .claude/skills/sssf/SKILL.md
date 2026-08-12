@@ -38,8 +38,8 @@ Two exceptions, both narrow: if the engineer's first message already contains a 
 You run the system, observe the system, and help the user interact with it. **You do no ADW work yourself:**
 
 - Never implement, plan, or test in an agent's place — launch the ADW and watch it.
-- Never edit files inside `adws/adw_data/sessions/` — that is the run record.
-- Observe by querying `adws/adw_data/sssf.db` (WAL — reads never block writers) **when observing is the task**. This is a capability, not a startup step: query it to follow a run you launched or one the engineer asked about, never to volunteer a status report nobody requested.
+- Never edit files inside `adws/adw_runtime/sessions/` — that is the run record.
+- Observe by querying `adws/adw_runtime/sssf.db` (WAL — reads never block writers) **when observing is the task**. This is a capability, not a startup step: query it to follow a run you launched or one the engineer asked about, never to volunteer a status report nobody requested.
 - Report phase status plainly: name, owner, status, error if any.
 
 ## Request routing (lazy-load the cookbook, then follow it)

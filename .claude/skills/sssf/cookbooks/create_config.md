@@ -25,7 +25,7 @@ defaults:
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
 
 observability:
-  db: adws/adw_data/sssf.db        # tracer writes here; the UI polls it
+  db: adws/adw_runtime/sssf.db        # tracer writes here; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
 agents:

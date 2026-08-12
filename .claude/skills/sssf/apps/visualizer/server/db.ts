@@ -28,12 +28,12 @@ import type {
   SessionUsage,
 } from "../shared/types.ts";
 
-const DEFAULT_DB_RELATIVE = "adws/adw_data/sssf.db";
+const DEFAULT_DB_RELATIVE = "adws/adw_runtime/sssf.db";
 const MAX_LIMIT = 1000;
 const DEFAULT_LIMIT = 500;
 
 /**
- * Resolve the db path: --db arg wins, then SSSF_DB, then <cwd>/adws/adw_data/sssf.db.
+ * Resolve the db path: --db arg wins, then SSSF_DB, then <cwd>/adws/adw_runtime/sssf.db.
  * The db lives in the TARGET repo, so cwd is the repo the visualizer is pointed at.
  */
 export function resolveDbPath(argv: string[] = Bun.argv): string {
@@ -53,7 +53,7 @@ export class SssfDb {
   /**
    * Where the ADW session dirs live: `{data_dir}/sessions/{adw_id}/{agent}/`.
    * The db sits in the same data_dir (config's `observability.db` defaults to
-   * `adws/adw_data/sssf.db`), so deriving it as a sibling of the db file keeps
+   * `adws/adw_runtime/sssf.db`), so deriving it as a sibling of the db file keeps
    * working when the whole data_dir is relocated.
    */
   readonly sessionsDir: string;

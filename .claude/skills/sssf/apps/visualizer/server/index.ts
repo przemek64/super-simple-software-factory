@@ -7,7 +7,7 @@
  * agents → sqlite → web ui, and the UI gets there by polling.
  *
  *   bun run server/index.ts
- *   bun run server/index.ts --db /path/to/repo/adws/adw_data/sssf.db
+ *   bun run server/index.ts --db /path/to/repo/adws/adw_runtime/sssf.db
  *   SSSF_DB=/path/to/sssf.db PORT=4600 bun run server/index.ts
  */
 import { existsSync, statSync } from "node:fs";

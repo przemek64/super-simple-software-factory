@@ -16,7 +16,7 @@ defaults:
   data_dir: adws/adw_data
 
 observability:
-  db: adws/adw_data/sssf.db
+  db: adws/adw_runtime/sssf.db
   poll_ms: 500
 
 agents:
@@ -55,7 +55,7 @@ agents:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `db` | path | SQLite trace db. `tracer.py` writes it directly; the visualizer polls it. Default `adws/adw_data/sssf.db`. |
+| `db` | path | SQLite trace db. `tracer.py` writes it directly; the visualizer polls it. Default `adws/adw_runtime/sssf.db`. |
 | `poll_ms` | int | Visualizer live-poll cadence in ms. History uses the same queries, lazy-paged. Default `500`. |
 
 ### `agents[]`

@@ -68,27 +68,27 @@ Two things that bite:
 
 ## Observe
 
-The trace db is `adws/adw_data/sssf.db`. It is WAL, so reads never block the running writers — poll it as often as you like.
+The trace db is `adws/adw_runtime/sssf.db`. It is WAL, so reads never block the running writers — poll it as often as you like.
 
 ```bash
 # where the run stands
-sqlite3 adws/adw_data/sssf.db \
+sqlite3 adws/adw_runtime/sssf.db \
   "select seq, name, kind, owner, status, attempt from phases where adw_id='a1b2c3d4' order by seq;"
 
 # the live tail — cursor on rowid, same query the visualizer polls
-sqlite3 adws/adw_data/sssf.db \
+sqlite3 adws/adw_runtime/sssf.db \
   "select rowid, type, name, started_at from events where adw_id='a1b2c3d4' and rowid > 0 order by rowid limit 50;"
 
 # why a phase failed
-sqlite3 adws/adw_data/sssf.db \
+sqlite3 adws/adw_runtime/sssf.db \
   "select attempt, gate, passed, checks_json from gate_results where adw_id='a1b2c3d4';"
 
 # session-level status
-sqlite3 adws/adw_data/sssf.db \
+sqlite3 adws/adw_runtime/sssf.db \
   "select adw_id, request, status, total_tokens from sessions order by started_at desc limit 5;"
 
 # what an agent actually did, slowest tool calls first
-sqlite3 adws/adw_data/sssf.db \
+sqlite3 adws/adw_runtime/sssf.db \
   "select name, tokens, started_at, ended_at from events
    where adw_id='a1b2c3d4' and type='tool_call' order by ended_at desc limit 20;"
 ```
@@ -99,7 +99,7 @@ Poll on a cursor: keep the highest `rowid` you have seen and query `where rowid 
 
 The ADW also narrates to stdout, and every line it prints is written to the db as a `log` event — terminal and swim lane tell the same story by construction, so tailing the background process is a valid second view rather than a competing source of truth.
 
-Files are the raw record if you need more than the db shows: `adws/adw_data/sessions/{adw_id}/{agent}/raw_output.jsonl` (full coding-agent stream), `envelope.json` (the parsed final response), `prompts/` (exactly what was sent), and `context_handoff/` (what agents wrote for each other).
+Files are the raw record if you need more than the db shows: `adws/adw_runtime/sessions/{adw_id}/{agent}/raw_output.jsonl` (full coding-agent stream), `envelope.json` (the parsed final response), `prompts/` (exactly what was sent), and `context_handoff/` (what agents wrote for each other).
 
 ## When a run is stuck
 

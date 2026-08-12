@@ -8,8 +8,8 @@ Usage:
     uv run <skill>/scripts/install.py [--force]
 
 Stamps: adws/ (modules + starter ADWs), adws/adw_data/prompt_engineering/
-(4 starter agents), adws/adw_sssf_config/sssf.config.yaml, .env.sample,
-.gitignore entries.
+(4 starter agents), adws/adw_visualizer/ (the trace UI),
+adws/adw_sssf_config/sssf.config.yaml, .env.sample, .gitignore entries.
 Existing files are skipped unless --force.
 """
 
@@ -18,7 +18,8 @@ import shutil
 import sys
 from pathlib import Path
 
-TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
+SKILL = Path(__file__).resolve().parent.parent
+TEMPLATES = SKILL / "templates"
 
 GITIGNORE_ENTRIES = [
     "adws/adw_runtime/",
@@ -29,13 +30,17 @@ GITIGNORE_ENTRIES = [
     # first repo that was ever installed into from scratch.
     "__pycache__/",
     "*.pyc",
+    # `just obs` runs `bun install` in the stamped visualizer.
+    "adws/adw_visualizer/node_modules/",
 ]
 
 
 def stamp(src: Path, dest: Path, force: bool, stamped: list, skipped: list) -> None:
     if src.is_dir():
         for child in sorted(src.iterdir()):
-            if child.name == "__pycache__":
+            # node_modules is the visualizer's installed dependency tree — it is
+            # `bun install`'s to create in the target repo, not ours to copy.
+            if child.name in ("__pycache__", "node_modules"):
                 continue
             stamp(child, dest / child.name, force, stamped, skipped)
         return
@@ -71,6 +76,14 @@ def main() -> int:
           root / "adws" / "adw_data" / "prompt_engineering", args.force, stamped, skipped)
     stamp(TEMPLATES / "harness_engineering",
           root / "adws" / "adw_data" / "harness_engineering", args.force, stamped, skipped)
+    # The trace UI ships INTO the repo it reads. `just obs` used to cd into
+    # .claude/skills/sssf/apps/visualizer, a path this installer never creates,
+    # so observability only worked in a repo that happened to vendor the whole
+    # skill — and vendoring the skill is what leaves a stale second copy of
+    # these templates behind. Stamping the one app that is actually needed
+    # keeps the recipe honest without duplicating the skill.
+    stamp(SKILL / "apps" / "visualizer",
+          root / "adws" / "adw_visualizer", args.force, stamped, skipped)
     stamp(TEMPLATES / "sssf.config.yaml",
           root / "adws" / "adw_sssf_config" / "sssf.config.yaml",
           args.force, stamped, skipped)

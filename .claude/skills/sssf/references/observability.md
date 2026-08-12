@@ -6,7 +6,7 @@ The event schema, the seven SQLite tables, and the polling contract — the one 
 
 **Files are the raw record** (`raw_output.jsonl` streams, `envelope.json`, `agent_map.json`); **SQLite (`sssf.db`) is the queryable mirror** the UI reads. `tracer.py` writes both. Losing the db loses nothing that can't be rebuilt from files.
 
-Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_data/sssf.db` — inside the **target** repo, gitignored.
+Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_runtime/sssf.db` — inside the **target** repo, gitignored.
 
 ## Event schema
 
