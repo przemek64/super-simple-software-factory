@@ -47,6 +47,12 @@ MARKER_ACTIONABLE = "Actionable comments posted:"
 MARKER_IN_PROGRESS = "Currently processing"
 MARKER_SKIPPED = "Review skipped"
 
+# The two-axis review (adw_pr_review_2axis_*.py) posts a body opening with this
+# line. Matched on the MARKER, never on the author or the model: the M3 and codex
+# variants post identical headers under the operator's own account, so a gate
+# that waited for "the M3 review" would have to change every time a seat does.
+MARKER_TWO_AXIS = "# PR Two-Axis Review"
+
 # `374-394`: _📐 Maintainability & Code Quality_ | _🔵 Trivial_ | _💤 Low value_
 RE_NITPICK_ENTRY = re.compile(r"^`(?P<lines>[\d-]+)`:\s*(?P<meta>.*)$")
 # <summary>config_reader.py (2)</summary>
@@ -298,6 +304,76 @@ def status(pr: int, *, repo: str, cwd: Path) -> ReviewStatus:
     if any(MARKER_IN_PROGRESS in body for body in bodies):
         return "in_progress"
     return "absent"
+
+
+class TwoAxisReview(BaseModel):
+    """One captured two-axis review, frozen the same way a rabbit review is."""
+
+    pr: int
+    review_id: int
+    submitted_at: str = ""
+    body: str = ""
+
+
+def two_axis_ready(pr: int, *, repo: str, cwd: Path) -> bool:
+    """Has a two-axis review landed on this PR?"""
+    reviews = _api(f"repos/{repo}/pulls/{pr}/reviews", cwd=cwd)
+    return any(MARKER_TWO_AXIS in (r.get("body") or "") for r in reviews)
+
+
+def capture_two_axis(pr: int, *, repo: str, cwd: Path) -> TwoAxisReview:
+    """Freeze the newest two-axis review. Raises if none has landed."""
+    reviews = [r for r in _api(f"repos/{repo}/pulls/{pr}/reviews", cwd=cwd)
+               if MARKER_TWO_AXIS in (r.get("body") or "")]
+    if not reviews:
+        raise CodeRabbitError(f"no two-axis review on PR #{pr}")
+    newest = max(reviews, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0))
+    return TwoAxisReview(pr=pr, review_id=int(newest["id"]),
+                         submitted_at=newest.get("submitted_at") or "",
+                         body=newest.get("body") or "")
+
+
+def await_reviews(pr: int, *, repo: str, cwd: Path, timeout_seconds: float = 900.0,
+                  interval_seconds: float = 30.0, on_poll=None
+                  ) -> tuple[Optional[RabbitReview], Optional[TwoAxisReview]]:
+    """Wait for BOTH reviewers, then freeze both as one contract.
+
+    Both or nothing, deliberately. The two reviewers ask different questions --
+    the rabbit asks "is this code correct", the two-axis pair asks "is it written
+    the way this repo writes code" and "is it what the issue asked for" -- so
+    triaging one without the other produces a fix run that answers half the
+    question and then reports itself finished. A partial contract is worse than
+    no contract: the ledger would record the PR as handled.
+
+    Returns (None, None) on timeout or on a rabbit skip, and the caller ends the
+    run cleanly. A reviewer that never speaks is not a defect in the PR.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        rabbit_state = status(pr, repo=repo, cwd=cwd)
+        axis_state = "ready" if two_axis_ready(pr, repo=repo, cwd=cwd) else "absent"
+        if on_poll:
+            on_poll(rabbit_state, axis_state, max(0.0, deadline - time.monotonic()))
+        if rabbit_state == "skipped":
+            return None, None
+        if rabbit_state == "ready" and axis_state == "ready":
+            return (capture(pr, repo=repo, cwd=cwd),
+                    capture_two_axis(pr, repo=repo, cwd=cwd))
+        if time.monotonic() >= deadline:
+            return None, None
+        time.sleep(min(interval_seconds, max(1.0, deadline - time.monotonic())))
+
+
+def write_two_axis_findings(review: TwoAxisReview, *, run) -> str:
+    """The two-axis review as its own handoff file, verbatim.
+
+    Verbatim rather than reformatted: the axes already emit structured findings
+    with severities and locations, and a triager judging them needs the text the
+    reviewer actually published, not this module's paraphrase of it.
+    """
+    path = _handoff_dir(run) / "two_axis_findings.md"
+    path.write_text(review.body, encoding="utf-8")
+    return str(path)
 
 
 def capture(pr: int, *, repo: str, cwd: Path) -> RabbitReview:

@@ -498,3 +498,44 @@ class PiResult(BaseModel):
     # visualizer's context bar measures against `context_window`.
     context_tokens: int = 0
     context_window: int = 0         # 0 when the registry declares no ceiling
+
+
+# ── Two-axis review ──────────────────────────────────────────────────────────
+
+class AxisFinding(BaseModel):
+    """One finding on one axis of a two-axis review."""
+
+    kind: str = ""                  # standards: documented|smell — spec: missing|scope-creep|wrong
+    severity: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"] = "LOW"
+    title: str = ""
+    location: str = ""              # file:line, or a spec reference
+    evidence: str = ""              # the cited standard, or the spec line, verbatim
+
+
+class AxisOutput(EnvelopeBase):
+    """One axis's verdict, structured.
+
+    The Archon workflow this ports from asked its agents for a JSON file on disk
+    and silently treated a malformed one as "no findings" — a parse slip and a
+    clean review look identical from the outside. Here the findings ride in the
+    envelope, which is parsed against this type with bounded correction retries,
+    so a malformed reply is fixed rather than mistaken for good news.
+    """
+
+    axis: Literal["standards", "spec"]
+    findings: list[AxisFinding] = Field(default_factory=list)
+    report_path: str = ""           # the prose report this axis wrote
+
+    def by_severity(self) -> dict[str, int]:
+        return {s: sum(1 for f in self.findings if f.severity == s)
+                for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW")}
+
+    @property
+    def blocking(self) -> list["AxisFinding"]:
+        return [f for f in self.findings if f.severity in ("CRITICAL", "HIGH")]
+
+
+# ── Deterministic quality blocks ─────────────────────────────────────────────
+
+QualityArea = Literal["frontend", "backend"]
+QualityOperation = Literal["lint", "typecheck", "build"]

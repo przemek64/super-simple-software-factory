@@ -149,17 +149,18 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
             ph.log(pr=f"PR #{pr}", repo=repo, branch=branch, worktree=str(work_root))
 
         with run.phase(PhaseParams(name="await_review", kind="code", owner="git",
-                                   description="Wait for CodeRabbit to finish, then freeze "
-                                               "that review as this run's contract")) as ph:
-            review = coderabbit.await_review(
+                                   description="Wait for BOTH reviewers to finish, then "
+                                               "freeze the pair as this run's contract")) as ph:
+            review, axis_review = coderabbit.await_reviews(
                 pr, repo=repo, cwd=repo_root,
                 timeout_seconds=timeout_seconds, interval_seconds=interval_seconds,
-                on_poll=lambda state, left: ph.log(state=state, seconds_left=int(left)))
+                on_poll=lambda rabbit, axis, left: ph.log(
+                    rabbit=rabbit, two_axis=axis, seconds_left=int(left)))
             if review is None:
                 # Not a failure. The PR was already tested and reviewed by the
                 # factory's own chain; a missing rabbit review is not a defect
                 # in it, so the run ends clean rather than marking good work red.
-                ph.log(outcome="no finished review — nothing to fix")
+                ph.log(outcome="both reviews did not land — nothing to fix")
                 clean_exit = True
             else:
                 ph.log(review_id=review.review_id, findings=len(review.findings),
@@ -179,13 +180,21 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
             return run.finish(accepted=True, reason="")
 
         findings_path = coderabbit.write_findings(review, run=run)
+        axis_path = coderabbit.write_two_axis_findings(axis_review, run=run)
 
         with run.phase(PhaseParams(name="triage", kind="agent", owner="triager", retries=1,
-                                   description="Rule on each finding before any code moves: "
-                                               "which are real, which are refused and why")) as ph:
+                                   description="Rule on every finding from BOTH reviewers "
+                                               "before any code moves: which are real, "
+                                               "which are refused and why")) as ph:
+            # Both sets, one ruling. The coverage gate still enforces the rabbit
+            # findings exactly, because those arrive as parsed records carrying
+            # ids; the two-axis review is handed over verbatim, so its findings
+            # are judged but not mechanically counted. Anything stricter would
+            # mean re-parsing what the axes already structured once.
             triage = ph.call(AgentCall(
                 output_type=TriageOutput,
-                prompt=f"{TRIAGE_NOTES}\n\nfindings_path: {findings_path}",
+                prompt=(f"{TRIAGE_NOTES}\n\nfindings_path: {findings_path}"
+                        f"\ntwo_axis_findings_path: {axis_path}"),
                 gates=[gates.triage_covers_every_finding(review)]))
 
         accepted = triage.accepted_ids

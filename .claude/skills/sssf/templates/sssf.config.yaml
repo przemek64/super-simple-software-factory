@@ -201,3 +201,161 @@ agents:
       - bash
       - write
       - edit
+
+  # ── PR review families ───────────────────────────────────────────────────
+  # Two independent review ADWs, and neither may edit what it reviews: every
+  # seat below is writes: [] with no edit tool, so a reviewer cannot quietly
+  # fix what it is supposed to be reporting.
+  #
+  #   adversarial (adw_pr_review_m3m3 / _mixed): per-file review, then an audit
+  #     pass that treats pass 1's claims as a target. Asks 'is this correct'.
+  #   two-axis (adw_pr_review_2axis_m3 / _codex): standards and spec judged
+  #     separately. Asks 'is it written the way this repo writes code' and 'is
+  #     it the thing the issue asked for' -- questions the other never asks.
+  #
+  # M3 and codex variants of each exist so a split verdict can be paid for when
+  # a PR matters. The gates key on the review, never on the model.
+
+  - name: file_reviewer_m3
+    model: minimax/MiniMax-M3
+    thinking: high
+    color: "#a78bfa"
+    purpose: Attack and verify ONE changed file of a PR; report, never repair.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/file_reviewer/system.md
+      user: adws/adw_data/prompt_engineering/file_reviewer/user.md
+    writes: []
+    tools:                         # full read surface; write only for its findings file
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  - name: auditor_m3
+    model: minimax/MiniMax-M3
+    thinking: high
+    color: "#f472b6"
+    purpose: Audit pass 1 on one file for misses and false positives; change nothing.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/auditor/system.md
+      user: adws/adw_data/prompt_engineering/auditor/user.md
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  # The mixed-variant audit seat. Same prompts, different family — a model that
+  # disagrees for structural reasons rather than sampling ones.
+
+  - name: auditor_codex
+    model: openai-codex/gpt-5.6-terra
+    thinking: high
+    color: "#f472b6"
+    purpose: Audit pass 1 on one file with a different model family's blind spots.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/auditor/system.md
+      user: adws/adw_data/prompt_engineering/auditor/user.md
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  - name: review_synthesizer
+    model: minimax/MiniMax-M2.7
+    color: "#94a3b8"
+    purpose: Merge per-file findings into one report; aggregate only, never add.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/review_synthesizer/system.md
+      user: adws/adw_data/prompt_engineering/review_synthesizer/user.md
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  # ── Two-axis PR review (adw_pr_review_2axis_m3.py / _codex.py) ─────────────
+  # Two axes, never one agent: Standards asks "is this written the way we write
+  # code here", Spec asks "is this what the issue asked for". Answered together,
+  # the loud finding masks the quiet one. Each variant swaps both seats so the
+  # two mounts can be run head to head on the same PR.
+
+  - name: standards_axis_m3
+    model: minimax/MiniMax-M3
+    thinking: high
+    color: "#34d399"
+    purpose: Judge a diff against documented repo standards and the smell baseline, only.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/standards_axis/system.md
+      user: adws/adw_data/prompt_engineering/standards_axis/user.md
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  - name: spec_axis_m3
+    model: minimax/MiniMax-M3
+    thinking: high
+    color: "#60a5fa"
+    purpose: Judge a diff against the originating issue and its cited documents, only.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/spec_axis/system.md
+      user: adws/adw_data/prompt_engineering/spec_axis/user.md
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  - name: standards_axis_codex
+    model: openai-codex/gpt-5.4
+    thinking: high
+    color: "#34d399"
+    purpose: The Standards axis on a different mind, with no single-call timeout.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/standards_axis/system.md
+      user: adws/adw_data/prompt_engineering/standards_axis/user.md
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  - name: spec_axis_codex
+    model: openai-codex/gpt-5.4
+    thinking: high
+    color: "#60a5fa"
+    purpose: The Spec axis on a different mind, with no single-call timeout.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/spec_axis/system.md
+      user: adws/adw_data/prompt_engineering/spec_axis/user.md
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
