@@ -510,6 +510,10 @@ class AxisFinding(BaseModel):
     title: str = ""
     location: str = ""              # file:line, or a spec reference
     evidence: str = ""              # the cited standard, or the spec line, verbatim
+    # Assigned by two_axis.assign_ids AFTER the model replies, never asked of the
+    # model: an id a model invents is not stable across a retry, and this one has
+    # to survive being written into a PR comment and read back by another run.
+    finding_id: str = ""
 
 
 class AxisOutput(EnvelopeBase):

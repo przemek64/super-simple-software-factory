@@ -27,6 +27,7 @@ THREE THINGS THIS DOES DIFFERENTLY FROM THE ARCHON ORIGINAL:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -229,6 +230,68 @@ diff is faithful to the spec.
 
 # ── assembly, verdict, posting — all deterministic ───────────────────────────
 
+def _finding_id(axis: str, location: str, title: str) -> str:
+    """Stable id for one axis finding.
+
+    Same scheme and same width as coderabbit._finding_id, because both ids end up
+    in one ruling set and the triager should not be able to tell from an id which
+    reviewer it came from. Content-derived rather than positional: re-running an
+    axis over an unchanged diff must produce the same ids, or a re-read would
+    look like a fresh set of findings.
+    """
+    raw = f"{axis}|{location}|{title}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:12]
+
+
+def assign_ids(axis: AxisOutput) -> AxisOutput:
+    """Give every finding on this axis its id, in place.
+
+    Called after the axis replies and before anything renders it. Duplicate
+    (location, title) pairs would collide onto one id and the coverage gate would
+    then demand a single ruling for what the axis reported twice, so a repeat gets
+    a discriminator rather than being silently merged.
+    """
+    seen: dict[str, int] = {}
+    for finding in axis.findings:
+        base = _finding_id(axis.axis, finding.location, finding.title)
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        finding.finding_id = base if count == 0 else _finding_id(
+            axis.axis, finding.location, f"{finding.title}#{count}")
+    return axis
+
+
+def _ledger(standards: AxisOutput, spec: AxisOutput) -> str:
+    """Every finding from both axes, one heading each, carrying its id.
+
+    This is the half of the posted review that a machine reads. The prose reports
+    above it are what a human reads, and they stay exactly as the axes wrote them;
+    this section exists so the fix run can recover a finding SET from a PR comment
+    rather than a wall of text. The `### [id]` shape matches the rabbit handoff
+    format on purpose — one parser shape, one ruling vocabulary.
+    """
+    lines = ["## Findings", "",
+             "One heading per finding, from both axes. The id is stable for the "
+             "same finding on the same diff; rule on every one of them.", ""]
+    pairs = [("standards", standards), ("spec", spec)]
+    if not any(axis.findings for _, axis in pairs):
+        lines += ["_No findings on either axis._", ""]
+        return "\n".join(lines)
+    for name, axis in pairs:
+        for finding in axis.findings:
+            lines += [
+                f"### [{finding.finding_id}] {finding.title or '(untitled)'}", "",
+                f"- **axis**: {name}",
+                f"- **severity**: {finding.severity}",
+                f"- **kind**: {finding.kind}",
+                f"- **location**: {finding.location or '(no location)'}",
+            ]
+            if finding.evidence:
+                lines += [f"- **evidence**: {finding.evidence}"]
+            lines += [""]
+    return "\n".join(lines)
+
+
 def assemble(sources: Sources, *, pr: int, issue: str,
              standards: AxisOutput, spec: AxisOutput) -> None:
     """Concatenate the two reports under two headings. Code, not an agent:
@@ -251,7 +314,8 @@ def assemble(sources: Sources, *, pr: int, issue: str,
         + (f" (issue #{issue})" if issue else "")
         + "\n\n## Standards\n\n" + report(standards, sources.standards_md)
         + "\n\n## Spec\n\n" + report(spec, sources.spec_md)
-        + "\n\n## Summary\n\n"
+        + "\n\n" + _ledger(standards, spec)
+        + "\n## Summary\n\n"
         + f"- **Standards**: {len(standards.findings)} finding(s); worst: {worst(standards)}\n"
         + f"- **Spec**: {len(spec.findings)} finding(s); worst: {worst(spec)}\n\n"
         + "The two axes are reported separately on purpose. There is no cross-axis "
@@ -374,6 +438,10 @@ def review_pr_two_axis(*, pr: int, standards_agent: str, spec_agent: str,
         with run.phase(PhaseParams(name="publish", kind="code", owner="git",
                                    description="Assemble the two axes side by side, derive "
                                                "the verdict, and post it to the PR")) as ph:
+            # Ids before assembly: the ledger the fix run parses is built from
+            # them, so an unlabelled finding would silently drop out of the set.
+            assign_ids(standards)
+            assign_ids(spec)
             assemble(sources, pr=pr, issue=issue, standards=standards, spec=spec)
             verdict = verdict_of(standards, spec)
             record = {"schema": "sssf-review/1", "review": "two-axis", "pr": pr,

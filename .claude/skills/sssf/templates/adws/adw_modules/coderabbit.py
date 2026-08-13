@@ -35,7 +35,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -306,6 +306,35 @@ def status(pr: int, *, repo: str, cwd: Path) -> ReviewStatus:
     return "absent"
 
 
+class AxisFindingRef(BaseModel):
+    """One two-axis finding, recovered from the posted review body.
+
+    The axes structure their findings once, in their own run; this is the same
+    record read back out of the PR comment, because the fix run is a separate
+    process that has only GitHub to read from.
+    """
+
+    finding_id: str
+    axis: str = ""                  # "standards" or "spec"
+    severity: str = ""
+    kind: str = ""
+    title: str = ""
+    location: str = ""
+
+    @property
+    def path(self) -> str:
+        """The file `location` names, or "" when it does not name one.
+
+        An axis location is free-form — "file.py:115-125", but also a spec
+        reference or a prose comparison — so this only answers when the leading
+        segment actually looks like a file. Guessing wider would make
+        accepted_findings_touched demand a diff to a path that never existed,
+        turning a good fix red.
+        """
+        head = self.location.split(":", 1)[0].strip()
+        return head if RE_LOOKS_LIKE_PATH.fullmatch(head) else ""
+
+
 class TwoAxisReview(BaseModel):
     """One captured two-axis review, frozen the same way a rabbit review is."""
 
@@ -313,6 +342,50 @@ class TwoAxisReview(BaseModel):
     review_id: int
     submitted_at: str = ""
     body: str = ""
+    findings: list[AxisFindingRef] = Field(default_factory=list)
+
+
+# The machine-readable half of a posted two-axis review: a "## Findings" section
+# of "### [id] title" headings with bullet fields under each. Everything above it
+# is the axes' prose, which is for a human and is never parsed.
+RE_AXIS_LEDGER = re.compile(r"^## Findings\s*$(?P<body>.*?)(?=^## |\Z)",
+                            re.M | re.S)
+RE_AXIS_FINDING = re.compile(r"^### \[(?P<id>[0-9a-f]{12})\]\s*(?P<title>.*?)\s*$",
+                             re.M)
+RE_AXIS_FIELD = re.compile(r"^- \*\*(?P<key>axis|severity|kind|location)\*\*:\s*(?P<value>.*?)\s*$",
+                           re.M)
+# One path segment ending in an extension: "tests/x_test.py", "docs/adr/0013-x.md".
+RE_LOOKS_LIKE_PATH = re.compile(r"[\w.\-/\\]+\.\w{1,8}")
+
+
+def parse_two_axis_findings(body: str) -> list[AxisFindingRef]:
+    """Recover the finding set from a posted two-axis review body.
+
+    Returns [] for a review posted before the ledger existed, which reads
+    downstream as "this reviewer contributed no countable findings" — the old
+    verbatim behaviour, not an error. A review that HAS a ledger and yields
+    nothing is a different thing, and the caller checks for it.
+    """
+    section = RE_AXIS_LEDGER.search(body or "")
+    if not section:
+        return []
+    text = section.group("body")
+
+    findings: list[AxisFindingRef] = []
+    matches = list(RE_AXIS_FINDING.finditer(text))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        fields = {m.group("key"): m.group("value")
+                  for m in RE_AXIS_FIELD.finditer(text[match.end():end])}
+        findings.append(AxisFindingRef(
+            finding_id=match.group("id"),
+            title=match.group("title"),
+            axis=fields.get("axis", ""),
+            severity=fields.get("severity", ""),
+            kind=fields.get("kind", ""),
+            location=fields.get("location", ""),
+        ))
+    return findings
 
 
 def two_axis_ready(pr: int, *, repo: str, cwd: Path) -> bool:
@@ -328,9 +401,10 @@ def capture_two_axis(pr: int, *, repo: str, cwd: Path) -> TwoAxisReview:
     if not reviews:
         raise CodeRabbitError(f"no two-axis review on PR #{pr}")
     newest = max(reviews, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0))
+    body = newest.get("body") or ""
     return TwoAxisReview(pr=pr, review_id=int(newest["id"]),
                          submitted_at=newest.get("submitted_at") or "",
-                         body=newest.get("body") or "")
+                         body=body, findings=parse_two_axis_findings(body))
 
 
 def await_reviews(pr: int, *, repo: str, cwd: Path, timeout_seconds: float = 900.0,
@@ -369,11 +443,39 @@ def write_two_axis_findings(review: TwoAxisReview, *, run) -> str:
 
     Verbatim rather than reformatted: the axes already emit structured findings
     with severities and locations, and a triager judging them needs the text the
-    reviewer actually published, not this module's paraphrase of it.
+    reviewer actually published, not this module's paraphrase of it. The ids the
+    triager must rule on are already in that text, in the ledger section.
     """
     path = _handoff_dir(run) / "two_axis_findings.md"
     path.write_text(review.body, encoding="utf-8")
     return str(path)
+
+
+class CombinedReview(BaseModel):
+    """Both reviewers' findings as one ruling set.
+
+    The coverage gate asks one question — was every captured finding ruled on
+    exactly once — and it should ask it about everything that was captured. Two
+    reviewers landed, so one set, one vocabulary of ids, one gate. Findings keep
+    their own shape either side of this; all the gate needs is `finding_id` and
+    `location`, which both already carry.
+
+    Ids from the two sources cannot collide in practice: both are sha256 prefixes
+    over different tuples, and a collision would need the same 48 bits from
+    different content. If one ever did, the gate would report the id ruled twice
+    rather than passing something through unnoticed.
+    """
+
+    findings: list[Union[RabbitFinding, AxisFindingRef]] = Field(default_factory=list)
+
+
+def combined_contract(review: RabbitReview,
+                      axis_review: Optional[TwoAxisReview]) -> CombinedReview:
+    """The finding set a fix run is measured against: rabbit plus both axes."""
+    findings: list[Union[RabbitFinding, AxisFindingRef]] = list(review.findings)
+    if axis_review is not None:
+        findings += list(axis_review.findings)
+    return CombinedReview(findings=findings)
 
 
 def capture(pr: int, *, repo: str, cwd: Path) -> RabbitReview:
