@@ -1313,6 +1313,13 @@ def enforce_safety(run, before: SafetySnapshot) -> None:
             after = snapshot_root(root, budget=comparison_budget, retain_backup=False, **kwargs)
             try:
                 changed = changed_paths(prior, after)
+                # Same rule as the write-allowlist: what git ignores is not part
+                # of the checkout's work product, so it is not attributable to
+                # the agent. An operator writing a note into a gitignored
+                # .archive/ during a run had a 17-minute plan phase rolled back
+                # and the note deleted -- the agent had never touched it.
+                ignored = _git_ignored(root, changed)
+                changed = [p for p in changed if p.replace("\\", "/") not in ignored]
                 outcomes = _restore_paths(root, changed, prior, after) if changed else {}
                 breaches.extend((root, path, outcomes[path]) for path in changed)
             finally:
