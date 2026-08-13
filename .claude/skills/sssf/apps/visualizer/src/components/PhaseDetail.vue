@@ -31,6 +31,7 @@ import { renderMarkdown } from '../lib/markdown'
 import StatusChip from './StatusChip.vue'
 import StatChip from './StatChip.vue'
 import DetailSection from './DetailSection.vue'
+import EnvelopeReport from './EnvelopeReport.vue'
 
 const props = defineProps<{
   phase: Phase
@@ -607,8 +608,14 @@ function togglePanel(id: string) {
                 {{ env.valid ? 'valid' : 'invalid' }}
               </span>
             </div>
-            <!-- Safe: highlightJson escapes ALL input before emitting its own spans. -->
-            <pre v-html="highlightJson(env.payload_json)" />
+            <EnvelopeReport :envelope="env" />
+            <!-- The JSON is the record; the reading above is a reading. Kept, but
+                 out of the way, since it is not what anyone opens this to learn. -->
+            <details class="raw">
+              <summary>raw envelope</summary>
+              <!-- Safe: highlightJson escapes ALL input before emitting its own spans. -->
+              <pre v-html="highlightJson(env.payload_json)" />
+            </details>
           </div>
         </DetailSection>
       </div>
@@ -1120,6 +1127,21 @@ h3:first-child {
 
 .output {
   margin-bottom: 14px;
+}
+
+.raw {
+  margin-top: 10px;
+}
+
+.raw summary {
+  cursor: pointer;
+  color: var(--faint);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.raw summary:hover {
+  color: var(--dim);
 }
 
 .output-line {
