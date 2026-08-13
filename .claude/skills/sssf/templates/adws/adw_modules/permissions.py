@@ -127,6 +127,20 @@ _BASH_DYNAMIC_RE = re.compile(
 # drive letter, so a leading "/" alone is drive-relative, not an escape.
 _ABSOLUTE_PATH_RE = re.compile(r"(?<![\w./\\])(?:[A-Za-z]:[\\/]|/)[^\s'\"<>|;&,)]*")
 _BASH_GLOB_RE = re.compile(r"[*?\[\]]")
+# A URL is not a filesystem path. `https://auth.docker.io/token?service=...`
+# was read by the scan above as the UNC path //auth.docker.io/token?... --
+# absolute by pathlib's rules, outside every root -- and the command was
+# refused. Any agent doing docker/registry or plain HTTP work hits this.
+#
+# `file:` is deliberately NOT skipped: a file: URL does name a real path, and
+# exempting it would turn this into a bypass.
+_URL_RE = re.compile(
+    r"(?<![\w.+-])(?!file:)[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>|;&)]*")
+
+
+def _url_spans(command: str) -> tuple[tuple[int, int], ...]:
+    """Character ranges of every URL in `command`, for the literal path scan."""
+    return tuple(match.span() for match in _URL_RE.finditer(command))
 # Commands whose FIRST operand is a program, not a filename. Without this an awk
 # script like '/fields/{f=1}' is read as the path C:/fields/{f=1} and refused.
 # Only the program is skipped; the files that follow are bounded as usual, so
@@ -346,6 +360,8 @@ def _looks_like_path(word: str) -> bool:
         return False
     if word in {".", ".."}:
         return True
+    if _URL_RE.fullmatch(word):
+        return False    # `curl https://host/x` names a host, not a file
     return ("/" in word or "\\" in word or Path(word).is_absolute()
             or bool(Path(word).suffix))
 
@@ -480,7 +496,11 @@ def _analyze_bash(
     # Catch a literal path the segment parser would never see as an operand --
     # inside a quoted `python -c` body, an option value, anywhere. Cheap, and it
     # is what makes dropping the interpreter refusal defensible.
-    for literal in _ABSOLUTE_PATH_RE.findall(command):
+    url_spans = _url_spans(command)
+    for match in _ABSOLUTE_PATH_RE.finditer(command):
+        literal = match.group()
+        if any(start <= match.start() < end for start, end in url_spans):
+            continue    # the host/path half of a URL, not a path on this disk
         if _is_null_sink(literal) or not Path(literal).is_absolute():
             continue
         candidate = Path(literal).resolve(strict=False)
@@ -830,17 +850,15 @@ def runtime_exclusions(run) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     # agent from writing adws/adw_sssf_config/ at all, so the guard is not what
     # was stopping an agent from touching these.
     #
-    # Untracked only, and checked the same way the db is: excluding a tracked
-    # path would turn operator convenience into a source-monitoring bypass.
+    # Excluded by path whatever their tracked state. These are now tracked
+    # (50b42ac), and an untracked-only rule silently stopped excluding them the
+    # moment they were committed -- reinstating the very false positive above.
+    # Tracked state is the wrong signal here: what makes these safe to exclude
+    # is that no agent may write adws/adw_sssf_config/ at all, which holds
+    # whether or not the files are in the index.
     for relative in (Path("adws/adw_sssf_config/launchers.yaml"),
                      Path("adws/adw_sssf_config/diagrams")):
         candidate = (canonical / relative).resolve()
-        listed = subprocess.run(
-            ["git", "ls-files", "-z", "--", relative.as_posix()], cwd=canonical,
-            capture_output=True,
-        )
-        if listed.returncode != 0 or listed.stdout:
-            continue    # tracked (or git unavailable): keep watching it
         if relative.name == "diagrams":
             roots = roots + (candidate,)
         else:
