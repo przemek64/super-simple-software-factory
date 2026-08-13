@@ -345,11 +345,16 @@ class TwoAxisReview(BaseModel):
     findings: list[AxisFindingRef] = Field(default_factory=list)
 
 
-# The machine-readable half of a posted two-axis review: a "## Findings" section
-# of "### [id] title" headings with bullet fields under each. Everything above it
-# is the axes' prose, which is for a human and is never parsed.
-RE_AXIS_LEDGER = re.compile(r"^## Findings\s*$(?P<body>.*?)(?=^## |\Z)",
-                            re.M | re.S)
+# The machine-readable half of a posted two-axis review, fenced by sentinels
+# that two_axis.py writes. NOT anchored on a heading: an axis writes its own
+# prose report, and one of them titled a section "## Findings" containing the
+# word "None." — a heading-anchored parser read that and stopped before the real
+# ledger, reporting zero findings from a review that had two. These comments
+# render as nothing on GitHub and prose does not produce them by accident.
+LEDGER_BEGIN = "<!-- sssf:two-axis-findings:begin -->"
+LEDGER_END = "<!-- sssf:two-axis-findings:end -->"
+RE_AXIS_LEDGER = re.compile(re.escape(LEDGER_BEGIN) + r"(?P<body>.*?)"
+                            + re.escape(LEDGER_END), re.S)
 RE_AXIS_FINDING = re.compile(r"^### \[(?P<id>[0-9a-f]{12})\]\s*(?P<title>.*?)\s*$",
                              re.M)
 RE_AXIS_FIELD = re.compile(r"^- \*\*(?P<key>axis|severity|kind|location)\*\*:\s*(?P<value>.*?)\s*$",
@@ -366,7 +371,10 @@ def parse_two_axis_findings(body: str) -> list[AxisFindingRef]:
     verbatim behaviour, not an error. A review that HAS a ledger and yields
     nothing is a different thing, and the caller checks for it.
     """
-    section = RE_AXIS_LEDGER.search(body or "")
+    # GitHub returns review bodies with CRLF. Every pattern below is line
+    # anchored, so normalise once here rather than making each one tolerate a
+    # stray \r that would otherwise ride along inside a captured value.
+    section = RE_AXIS_LEDGER.search((body or "").replace("\r\n", "\n"))
     if not section:
         return []
     text = section.group("body")

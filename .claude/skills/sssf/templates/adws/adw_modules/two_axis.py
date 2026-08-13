@@ -230,6 +230,16 @@ diff is faithful to the spec.
 
 # ── assembly, verdict, posting — all deterministic ───────────────────────────
 
+# The machine-readable ledger is fenced by sentinels, not by a heading.
+# An axis writes its own prose report and one of them wrote its own "## Findings"
+# section — so a heading-anchored parser read the agent's "None." and stopped
+# before the real ledger. These render as nothing on GitHub and no reviewer
+# writing prose will emit them by accident. Kept identical to the constants in
+# adw_modules/coderabbit.py, which is the only thing that reads them back.
+LEDGER_BEGIN = "<!-- sssf:two-axis-findings:begin -->"
+LEDGER_END = "<!-- sssf:two-axis-findings:end -->"
+
+
 def _finding_id(axis: str, location: str, title: str) -> str:
     """Stable id for one axis finding.
 
@@ -270,12 +280,13 @@ def _ledger(standards: AxisOutput, spec: AxisOutput) -> str:
     rather than a wall of text. The `### [id]` shape matches the rabbit handoff
     format on purpose — one parser shape, one ruling vocabulary.
     """
-    lines = ["## Findings", "",
+    lines = [LEDGER_BEGIN, "",
+             "## Findings (the ruling set)", "",
              "One heading per finding, from both axes. The id is stable for the "
              "same finding on the same diff; rule on every one of them.", ""]
     pairs = [("standards", standards), ("spec", spec)]
     if not any(axis.findings for _, axis in pairs):
-        lines += ["_No findings on either axis._", ""]
+        lines += ["_No findings on either axis._", "", LEDGER_END, ""]
         return "\n".join(lines)
     for name, axis in pairs:
         for finding in axis.findings:
@@ -287,8 +298,12 @@ def _ledger(standards: AxisOutput, spec: AxisOutput) -> str:
                 f"- **location**: {finding.location or '(no location)'}",
             ]
             if finding.evidence:
-                lines += [f"- **evidence**: {finding.evidence}"]
+                # One line: the fence is a record, not the report. A multi-line
+                # quote here would put "## " and "### " from the diff inside the
+                # ledger and break the very framing that makes it parseable.
+                lines += [f"- **evidence**: {' '.join(finding.evidence.split())[:300]}"]
             lines += [""]
+    lines += [LEDGER_END, ""]
     return "\n".join(lines)
 
 
