@@ -364,3 +364,69 @@ export interface HealthResponse {
 export interface ApiError {
   error: string;
 }
+
+// ── launchers ───────────────────────────────────────────────────────────────
+// The dashboard's half of the API. Unlike everything above, these types mirror
+// a config file and a launch record, not a table in sssf.db.
+
+/** One input on a launcher's form. */
+export interface LauncherParam {
+  name: string;
+  /** The command-line flag it becomes, e.g. "--issue". */
+  flag: string;
+  type: "int" | "string";
+  /** What the box is called on screen — "Issue number", not "issue". */
+  label: string;
+  hint: string | null;
+  required: boolean;
+}
+
+/** A workflow plus a fixed parameter set: one row on the dashboard. */
+export interface Launcher {
+  id: string;
+  label: string;
+  description: string | null;
+  /** Repo-relative path of the ADW script, e.g. "adws/adw_simple_sdlc.py". */
+  workflow: string;
+  /** Repo-relative path of the static diagram shown beside the row. */
+  diagram: string | null;
+  params: LauncherParam[];
+}
+
+/** POST /api/launch */
+export interface LaunchRequest {
+  launcher_id: string;
+  values: Record<string, string>;
+}
+
+/**
+ * What was started, recorded by the server because the db cannot answer it:
+ * `sessions.request` holds the engineer's ask, not the parameters it came from.
+ */
+export interface LaunchRecord {
+  adw_id: string;
+  launcher_id: string;
+  label: string;
+  /** launcher id + arguments — two launches with the same signature are the
+   *  same work, and the second one is refused while the first is alive. */
+  signature: string;
+  command: string;
+  log: string;
+  pid: number;
+  started_at: string;
+}
+
+/**
+ * A launch as the dashboard sees it: the record plus what became of it.
+ *
+ * `starting` is the gap between spawning and the run's first insert. A launch
+ * that never closes that gap is `failed_to_start` — the case a fire-and-forget
+ * button would have shown as nothing at all.
+ */
+export type LaunchState = "starting" | "running" | "success" | "fail" | "failed_to_start";
+
+export interface LaunchStatus extends LaunchRecord {
+  state: LaunchState;
+  /** Tail of the launch log, only when the run failed to start. */
+  log_tail: string | null;
+}

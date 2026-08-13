@@ -4,6 +4,9 @@ import type {
   EventsPage,
   GateResult,
   HealthResponse,
+  LaunchRecord,
+  Launcher,
+  LaunchStatus,
   PromptsResponse,
   SessionDetail,
   SessionSummary,
@@ -52,6 +55,41 @@ export async function archiveSession(adwId: string, archived = true): Promise<vo
     body: JSON.stringify({ archived }),
   })
   if (!res.ok) throw new Error(`POST ${url} → ${res.status}`)
+}
+
+// ── dashboard ───────────────────────────────────────────────────────────────
+
+export function fetchLaunchers(): Promise<Launcher[]> {
+  return getJson('/api/launchers') as Promise<Launcher[]>
+}
+
+export function fetchLaunches(): Promise<LaunchStatus[]> {
+  return getJson('/api/launches') as Promise<LaunchStatus[]>
+}
+
+/**
+ * Start a run and get its id back, so the caller can go straight to the trace.
+ *
+ * A refusal carries a sentence worth showing — "already running as a1b2c3d4",
+ * "Issue number is required" — so the message is preferred over the status.
+ */
+export async function launchRun(
+  launcherId: string,
+  values: Record<string, string>,
+): Promise<LaunchRecord> {
+  const res = await fetch('/api/launch', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ launcher_id: launcherId, values }),
+  })
+  const data = (await res.json().catch(() => null)) as (LaunchRecord & { error?: string }) | null
+  if (!res.ok) throw new Error(data?.error ?? `POST /api/launch → ${res.status}`)
+  if (!data) throw new Error('launch returned no body')
+  return data
+}
+
+export function diagramUrl(launcherId: string): string {
+  return `/api/launchers/${encodeURIComponent(launcherId)}/diagram`
 }
 
 export function fetchHealth(): Promise<HealthResponse> {

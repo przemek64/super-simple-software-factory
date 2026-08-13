@@ -1,7 +1,19 @@
 import { ref } from 'vue'
 
-// Hash routes: #/ → sessions · #/<adw_id> → waterfall · #/<adw_id>/<phase_id> → phase panel open
+// Hash routes, by section:
+//   #/                              → sessions list
+//   #/runs/<adw_id>                 → waterfall
+//   #/runs/<adw_id>/<phase_id>      → phase panel open
+//   #/dashboard                     → launchers
+//
+// The run id used to be the first segment, which left no room for a second
+// screen without reserving a word inside the id namespace — a reserved word in
+// an id namespace is the kind of thing that breaks silently later, so runs got
+// a section of their own instead.
+export type Section = 'sessions' | 'runs' | 'dashboard'
+
 export interface Route {
+  section: Section
   adwId: string | null
   phaseId: string | null
 }
@@ -12,7 +24,15 @@ function parse(): Route {
     .split('/')
     .filter(Boolean)
     .map(decodeURIComponent)
-  return { adwId: parts[0] ?? null, phaseId: parts[1] ?? null }
+
+  if (parts[0] === 'dashboard') return { section: 'dashboard', adwId: null, phaseId: null }
+  if (parts[0] === 'runs' && parts[1]) {
+    return { section: 'runs', adwId: parts[1], phaseId: parts[2] ?? null }
+  }
+  // Links minted before the sections existed put the run id first. They still
+  // work, and they land on the same run.
+  if (parts[0]) return { section: 'runs', adwId: parts[0], phaseId: parts[1] ?? null }
+  return { section: 'sessions', adwId: null, phaseId: null }
 }
 
 const route = ref<Route>(parse())
@@ -30,11 +50,13 @@ export function useRoute() {
 export const phaseCrumb = ref<string | null>(null)
 
 export function hrefFor(adwId?: string | null, phaseId?: string | null): string {
-  let h = '#/'
-  if (adwId) h += encodeURIComponent(adwId)
-  if (adwId && phaseId) h += `/${encodeURIComponent(phaseId)}`
+  if (!adwId) return '#/'
+  let h = `#/runs/${encodeURIComponent(adwId)}`
+  if (phaseId) h += `/${encodeURIComponent(phaseId)}`
   return h
 }
+
+export const dashboardHref = '#/dashboard'
 
 export function navigate(adwId?: string | null, phaseId?: string | null): void {
   window.location.hash = hrefFor(adwId, phaseId)

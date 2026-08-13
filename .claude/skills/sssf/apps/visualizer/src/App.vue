@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Columns3, Rows3 } from 'lucide-vue-next'
+import { Columns3, LayoutDashboard, ListTree, Rows3 } from 'lucide-vue-next'
 import { fetchHealth } from './lib/api'
-import { useRoute, hrefFor, phaseCrumb } from './lib/router'
+import { useRoute, hrefFor, dashboardHref, phaseCrumb } from './lib/router'
 import { layoutMode } from './lib/view'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
+import Dashboard from './components/Dashboard.vue'
 
 const route = useRoute()
 
@@ -45,12 +46,16 @@ function toggleLayout() {
           <span class="repo" :title="`this factory reads ${repo}`">{{ repo }}</span>
         </template>
         <span class="sep">›</span>
-        <a :href="hrefFor()" :class="{ current: !route.adwId }">sessions</a>
-        <template v-if="route.adwId">
+        <a :href="hrefFor()" :class="{ current: route.section === 'sessions' }">sessions</a>
+        <template v-if="route.section === 'runs' && route.adwId">
           <span class="sep">›</span>
           <a :href="hrefFor(route.adwId)" :class="{ current: !route.phaseId }">{{
             route.adwId
           }}</a>
+        </template>
+        <template v-if="route.section === 'dashboard'">
+          <span class="sep">›</span>
+          <span class="current">dashboard</span>
         </template>
         <template v-if="route.adwId && route.phaseId">
           <span class="sep">›</span>
@@ -58,8 +63,23 @@ function toggleLayout() {
         </template>
       </nav>
       <span class="topbar-right">
+        <!-- The two screens. Sessions stays the front page: this tool is opened
+             to watch a run far more often than to start one, and a launch button
+             you walk past every time is a launch button eventually pressed by
+             accident. -->
+        <a
+          class="screen-switch"
+          :href="route.section === 'dashboard' ? hrefFor() : dashboardHref"
+        >
+          <component
+            :is="route.section === 'dashboard' ? ListTree : LayoutDashboard"
+            :size="16"
+            :stroke-width="2"
+          />
+          {{ route.section === 'dashboard' ? 'sessions' : 'dashboard' }}
+        </a>
         <button
-          v-if="route.adwId"
+          v-if="route.section === 'runs' && route.adwId"
           class="layout-toggle"
           :title="`Switch to ${layoutMode === 'vertical' ? 'horizontal' : 'vertical'} layout`"
           @click="toggleLayout"
@@ -71,7 +91,8 @@ function toggleLayout() {
       </span>
     </header>
     <main>
-      <SessionsList v-if="!route.adwId" />
+      <Dashboard v-if="route.section === 'dashboard'" />
+      <SessionsList v-else-if="!route.adwId" />
       <SessionTrace v-else :key="route.adwId" :adw-id="route.adwId" :phase-id="route.phaseId" />
     </main>
   </div>
@@ -177,6 +198,23 @@ function toggleLayout() {
   font-family: var(--sans);
   font-size: 12px;
   cursor: pointer;
+}
+
+.screen-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.screen-switch:hover {
+  color: var(--text);
+  border-color: var(--cyan);
 }
 
 .layout-toggle:hover {

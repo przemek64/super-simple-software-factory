@@ -1,10 +1,12 @@
 /**
  * SSSF visualizer server — JSON API over a target repo's sssf.db, plus the
- * built UI when ./dist exists. Reads are read-only; the single write is
+ * built UI when ./dist exists. Reads are read-only; the one write to the db is
  * POST /api/sessions/:adw_id/archive, which sets one review flag on a row.
  *
- * There is no ingest endpoint and no websocket. The data path is
- * agents → sqlite → web ui, and the UI gets there by polling.
+ * It also STARTS runs: POST /api/launch spawns a workflow in the target repo
+ * (see server/launcher.ts, and docs/adr/0001 for why). Nothing about a running
+ * run comes back this way — the data path is still agents → sqlite → web ui,
+ * and the UI gets there by polling.
  *
  *   bun run server/index.ts
  *   bun run server/index.ts --db /path/to/repo/adws/adw_runtime/sssf.db
@@ -13,7 +15,15 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
-import type { AgentPrompts, ApiError, HealthResponse } from "../shared/types.ts";
+import { LauncherError, Launchers } from "./launcher.ts";
+import type {
+  AgentPrompts,
+  ApiError,
+  HealthResponse,
+  LaunchRequest,
+  LaunchState,
+  LaunchStatus,
+} from "../shared/types.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
 
@@ -32,6 +42,55 @@ try {
 } catch (error) {
   console.error(`[sssf] ${(error as Error).message}`);
   process.exit(1);
+}
+
+const launchers = new Launchers(db.path);
+
+/**
+ * A run is alive if its session row says so. Before the run's first insert
+ * there is no row at all, so a just-spawned launch counts as alive for a grace
+ * period — otherwise a double-click inside the first few seconds, the most
+ * likely double-click there is, would slip past the duplicate check.
+ */
+const START_GRACE_MS = 90_000;
+
+function launchState(record: { adw_id: string; started_at: string }): LaunchState {
+  const session = db.session(record.adw_id);
+  if (session) {
+    return (session.status ?? "running") as LaunchState;
+  }
+  const age = Date.now() - Date.parse(record.started_at);
+  return Number.isFinite(age) && age < START_GRACE_MS ? "starting" : "failed_to_start";
+}
+
+function isActive(record: { adw_id: string; started_at: string }): boolean {
+  const state = launchState(record);
+  return state === "running" || state === "starting";
+}
+
+/**
+ * Only the visualizer's own pages may start a run. The server listens on a
+ * local port that any page in the browser can reach, and POST /launch spends
+ * real money in a real repository.
+ *
+ * A missing Origin is allowed: a browser always sends one on a cross-site POST
+ * (a JSON body forces a preflight), so the header's absence means a non-browser
+ * caller — curl, a script — which was never the thing being guarded against.
+ */
+function originAllowed(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return true;
+  let host: URL;
+  try {
+    host = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (host.hostname !== "localhost" && host.hostname !== "127.0.0.1") return false;
+  const port = Number(host.port || 80);
+  // The API port, or the UI's dev-server port beside it, which proxies here and
+  // forwards its own origin.
+  return port === PORT || port === PORT + 1;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -133,6 +192,59 @@ const server = Bun.serve({
 
     "/api/sessions": safely((req) => json(db.sessions(intQuery(req, "limit", 200)))),
 
+    // ── the dashboard ───────────────────────────────────────────────────────
+
+    "/api/launchers": safely(async () => json(await launchers.list())),
+
+    /** The static diagram beside a launcher. It describes the workflow and
+     *  never a run, so it is a file, cached like one. */
+    "/api/launchers/:id/diagram": safely(async (req) => {
+      const id = param(req, "id");
+      if (!isSafeSegment(id)) return json({ error: "invalid launcher" } satisfies ApiError, 400);
+      const file = await launchers.diagramFile(id);
+      if (!file) return notFound(`no diagram for ${id}`);
+      return new Response(Bun.file(file), {
+        headers: { "content-type": "image/svg+xml; charset=utf-8" },
+      });
+    }),
+
+    /** Every launch this server started, newest first, with what became of it. */
+    "/api/launches": safely(async () =>
+      json(
+        await Promise.all(
+          (await launchers.records()).map(async (record) => {
+            const state = launchState(record);
+            return {
+              ...record,
+              state,
+              log_tail:
+                state === "failed_to_start" ? await launchers.logTail(record.adw_id) : null,
+            } satisfies LaunchStatus;
+          }),
+        ),
+      ),
+    ),
+
+    "/api/launch": {
+      POST: safely(async (req) => {
+        if (!originAllowed(req)) {
+          return json({ error: "cross-origin launch refused" } satisfies ApiError, 403);
+        }
+        const body = (await req.json().catch(() => null)) as LaunchRequest | null;
+        if (!body || typeof body.launcher_id !== "string") {
+          return json({ error: "launcher_id is required" } satisfies ApiError, 400);
+        }
+        try {
+          return json(await launchers.launch(body, isActive), 201);
+        } catch (error) {
+          if (error instanceof LauncherError) {
+            return json({ error: error.message } satisfies ApiError, error.status);
+          }
+          throw error;
+        }
+      }),
+    },
+
     "/api/sessions/:adw_id": safely((req) => {
       const detail = db.sessionDetail(param(req, "adw_id"));
       return detail ? json(detail) : notFound(`no session ${param(req, "adw_id")}`);
@@ -208,6 +320,10 @@ const server = Bun.serve({
 
 console.log(`[sssf] visualizer api  http://localhost:${server.port}`);
 console.log(`[sssf] db              ${db.path}  [journal_mode=${db.journalMode}]`);
+console.log(
+  `[sssf] launches into   ${launchers.repoRoot}` +
+    (existsSync(launchers.file) ? "" : `  (no ${launchers.file} — dashboard will be empty)`),
+);
 console.log(
   existsSync(DIST_DIR)
     ? `[sssf] serving ui from  ${DIST_DIR}`
