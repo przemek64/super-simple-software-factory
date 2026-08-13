@@ -79,6 +79,18 @@ tail ADW_ID:
 procs ADW_ID:
     @sqlite3 {{db}} "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"
 
+# ── stop a run ──────────────────────────────────────────────────────────────
+# Works on Windows as well as POSIX. A pid is only signalled after it is proven
+# to still be the process the trace recorded, so a recycled pid is left alone.
+
+# which sessions read 'running', and whether their process really is
+runs:
+    uv run adws/adw_kill.py --list --db {{db}}
+
+# stop a run, agent children first: just kill <adw_id>
+kill ADW_ID:
+    uv run adws/adw_kill.py --adw-id {{ADW_ID}} --db {{db}}
+
 # ── observability UI ────────────────────────────────────────────────────────
 
 # Needs bun. The app is stamped into this repo by the installer, so this works

@@ -12,11 +12,11 @@ import signal
 import sys
 from pathlib import Path
 
-from . import git_helper, worktree
+from . import git_helper, procinfo, worktree
 from .data_types import SSSFConfig
 from .runner import Run
 from .tracer import Tracer
-from .utils import engineer_name, new_id
+from .utils import engineer_name, new_id, now_iso
 
 
 # Resolve from the installed factory code, not the process cwd. This remains
@@ -41,6 +41,52 @@ def state_path(repo_root: Path, configured: str | Path) -> Path:
     """
     return _state_path(repo_root, configured)
 
+def _reconcile_dead_runs(tracer: Tracer, current_adw_id: str) -> None:
+    """Mark 'running' sessions whose workflow process no longer exists.
+
+    A hard kill never reaches _finalize_when_killed, so the session row claims
+    work is in flight that is already dead — forever, since nothing else ever
+    revisits it. On Windows that is EVERY stop: there is no SIGTERM, so
+    `Stop-Process`/`taskkill` end the process without running the handler, and
+    two such corpses sat reading 'running' for days.
+
+    Every new run sweeps, so the truth does not depend on anyone remembering to
+    run a cleanup script. A session is dead when its recorded `adw` pid is gone
+    or recycled. Genuinely live runs are untouched — the OS says so, not a
+    timeout — and procinfo fails safe, reporting a pid it cannot probe as
+    alive, so an unreadable process list leaves a stale row rather than
+    finalizing a run that is still working.
+    """
+    rows = tracer.conn.execute(
+        "SELECT s.adw_id, p.pid, p.command FROM sessions s"
+        " JOIN processes p ON p.adw_id = s.adw_id AND p.kind = 'adw'"
+        " WHERE s.status = 'running' AND s.adw_id != ?",
+        (current_adw_id,)).fetchall()
+    if not rows:
+        return
+    live = procinfo.live_commands(pid for _, pid, _ in rows if pid is not None)
+    # A resumed session records an `adw` process per invocation, so one dead pid
+    # does not make the session dead: the original can be gone while its resume
+    # is still working. Every recorded process must be gone before we finalize.
+    by_session: dict[str, bool] = {}
+    for adw_id, pid, command in rows:
+        actual = live.get(int(pid)) if pid is not None else None
+        running = actual is not None and procinfo.is_same_process(command, actual)
+        by_session[adw_id] = by_session.get(adw_id, False) or running
+    for adw_id, any_alive in by_session.items():
+        if any_alive:
+            continue
+        ts = now_iso()
+        tracer.conn.execute(
+            "UPDATE sessions SET status='fail', ended_at=?"
+            " WHERE adw_id=? AND status='running'", (ts, adw_id))
+        tracer.conn.execute(
+            "UPDATE phases SET status='fail', ended_at=?,"
+            " error='process died without finalizing (hard kill or crash)'"
+            " WHERE adw_id=? AND status='running'", (ts, adw_id))
+        tracer.processes_end_all(adw_id)
+
+
 def _finalize_when_killed(run: Run) -> None:
     """A killed run still closes its own trace.
 
@@ -49,12 +95,21 @@ def _finalize_when_killed(run: Run) -> None:
     its process rows open — the trace would claim work is in flight that is
     already dead. Turning the signal into SystemExit both finalizes here and
     lets the phase context manager record the phase as failed on the way out.
+
+    Windows delivers no SIGTERM: `taskkill /F` and `Stop-Process` terminate the
+    process outright and this handler never runs. SIGBREAK (Ctrl-Break, and
+    `taskkill` without /F on a console process) is the closest equivalent, so it
+    is registered where it exists — but the real safety net there is
+    _reconcile_dead_runs, which does not need the dying process to cooperate.
     """
     def handler(signum, _frame):
         run.tracer.session_finish(run.adw_id, ok=False)   # also closes process rows
         raise SystemExit(128 + signum)
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    handled = [signal.SIGTERM, signal.SIGINT]
+    if hasattr(signal, "SIGBREAK"):
+        handled.append(signal.SIGBREAK)
+    for sig in handled:
         signal.signal(sig, handler)
 
 
@@ -174,6 +229,7 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None, *, repo_root: Path,
                 pass
         tracer.conn.close()
         raise
+    _reconcile_dead_runs(tracer, adw_id)   # hard-killed runs stop reading 'running'
     # This process is the run. Record it before any phase opens, so a run that
     # hangs in its first agent call is still killable by adw_id.
     tracer.process_start(adw_id, "adw", "", os.getpid(),
