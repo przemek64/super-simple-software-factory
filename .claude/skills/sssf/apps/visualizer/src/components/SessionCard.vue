@@ -8,6 +8,7 @@ import { hrefFor } from '../lib/router'
 import StatusChip from './StatusChip.vue'
 import StatChip from './StatChip.vue'
 import PhaseDots from './PhaseDots.vue'
+import FailureBar from './FailureBar.vue'
 
 const props = defineProps<{ session: SessionSummary; nowMs: number }>()
 const emit = defineEmits<{ archived: [adwId: string] }>()
@@ -172,17 +173,21 @@ const durationMs = computed(() => {
 // row slots. A roster that overflows spends one slot on the "+N more" line and
 // shows MIN_VISIBLE_ROWS agents in the rest — never fewer than three, so a
 // five-agent chain still reads as a chain rather than as a pair and a count.
-const MAX_VISIBLE_ROWS = 4
-const MIN_VISIBLE_ROWS = 3
+// A failure bar takes one row slot back, so the roster budget drops by one
+// while it is shown — the card height is fixed and the timeline is what gives.
+const failure = computed(() => props.session.failure ?? null)
 
-const overflowing = computed(() => rows.value.length > MAX_VISIBLE_ROWS)
+const MAX_VISIBLE_ROWS = computed(() => (failure.value ? 3 : 4))
+const MIN_VISIBLE_ROWS = computed(() => (failure.value ? 2 : 3))
+
+const overflowing = computed(() => rows.value.length > MAX_VISIBLE_ROWS.value)
 
 const visibleRows = computed(() =>
-  overflowing.value ? rows.value.slice(0, MIN_VISIBLE_ROWS) : rows.value,
+  overflowing.value ? rows.value.slice(0, MIN_VISIBLE_ROWS.value) : rows.value,
 )
 
 const hiddenRowCount = computed(() =>
-  overflowing.value ? rows.value.length - MIN_VISIBLE_ROWS : 0,
+  overflowing.value ? rows.value.length - MIN_VISIBLE_ROWS.value : 0,
 )
 </script>
 
@@ -201,7 +206,9 @@ const hiddenRowCount = computed(() =>
     <span class="card-adw" :title="session.adw_name ?? ''">{{ session.adw_name ?? '—' }}</span>
     <span class="card-req" :title="session.request ?? ''">{{ session.request }}</span>
 
-    <div v-if="rows.length" class="tl">
+    <FailureBar v-if="failure" :failure="failure" compact />
+
+    <div v-if="rows.length" class="tl" :class="{ shrunk: failure }">
       <div class="tl-axis">
         <span class="tl-gutter" />
         <span class="tl-scale">
@@ -232,7 +239,7 @@ const hiddenRowCount = computed(() =>
       </div>
       <div v-if="hiddenRowCount" class="tl-more dim">+{{ hiddenRowCount }} more agents</div>
     </div>
-    <div v-else class="tl tl-empty faint">no agent activity yet</div>
+    <div v-else class="tl tl-empty faint" :class="{ shrunk: failure }">no agent activity yet</div>
 
     <div class="card-foot">
       <span class="foot-status">
@@ -253,8 +260,9 @@ const hiddenRowCount = computed(() =>
 .card {
   /* Uniform size: the grid fixes the width, this fixes the height — content
      clamps and truncates rather than resizing the card. Grew by one 40px row
-     slot when the timeline went from three to four. */
-  height: 420px;
+     slot when the timeline went from three to four, and by 26px more so a
+     failure bar fits by taking back only one row slot instead of two. */
+  height: 446px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -360,6 +368,18 @@ const hiddenRowCount = computed(() =>
   height: 194px;
   flex: none;
   overflow: hidden;
+}
+
+/* A failure bar is 56px + the 10px flex gap; the timeline gives back one 40px
+   slot and the card absorbed the other 26px, so every card is still the same
+   height whether or not it failed. */
+.tl.shrunk {
+  height: 154px;
+}
+
+.fail-bar {
+  flex: none;
+  height: 56px;
 }
 
 .tl-more {

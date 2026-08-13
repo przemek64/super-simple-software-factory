@@ -26,6 +26,9 @@ export async function fetchSession(adwId: string): Promise<SessionDetail> {
     usage: detail.usage ?? { read: 0, written: 0 },
     phases: detail.phases ?? [],
     agents: detail.agents ?? [],
+    // Absent when the UI is newer than the server it is talking to; "no reason
+    // to show" is the right reading of that, not an error.
+    failure: detail.failure ?? null,
   }
 }
 

@@ -5,6 +5,8 @@ export type {
   SessionSummary,
   SessionUsage,
   SessionDetail,
+  FailureReason,
+  FailureKind,
   Phase,
   Event as EventRow,
   EventsPage,

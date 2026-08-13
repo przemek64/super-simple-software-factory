@@ -12,6 +12,7 @@
  * never runs unless a human clicks the button.
  */
 import { Database } from "bun:sqlite";
+import { classifyFailure } from "./failure.ts";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import type {
@@ -188,6 +189,16 @@ export class SssfDb {
     // dots are colored per agent — without this it would be one request per card.
     const agentsByAdw = this.agentsFor(ids);
 
+    // Gate rows are the fallback evidence when a failed phase left no error
+    // text. Only those sessions need them, and on a healthy list that is none —
+    // so the extra query is skipped entirely rather than paid for per card.
+    const needGates = rows
+      .map((r) => r.adw_id)
+      .filter((id) =>
+        (byAdw.get(id) ?? []).some((p) => p.status === "fail" && !(p.error ?? "").trim()),
+      );
+    const gatesByAdw = this.failedGatesFor(needGates);
+
     const summaries: SessionSummary[] = [];
     for (const session of rows) {
       const phases = byAdw.get(session.adw_id) ?? [];
@@ -196,10 +207,34 @@ export class SssfDb {
           phases,
           phase_count: phases.length,
           agents: agentsByAdw.get(session.adw_id) ?? [],
+          failure: classifyFailure(session, phases, gatesByAdw.get(session.adw_id) ?? []),
         }),
       );
     }
     return summaries;
+  }
+
+  /** Failed gate rows for a set of sessions, empty map for an empty input. */
+  private failedGatesFor(adwIds: string[]): Map<string, GateResult[]> {
+    const byAdw = new Map<string, GateResult[]>();
+    if (adwIds.length === 0) return byAdw;
+    const placeholders = adwIds.map(() => "?").join(", ");
+    const checks = this.optionalColumn("gate_results", "checks_json");
+    const rows = this.db
+      .query<GateResult, string[]>(
+        `SELECT id, adw_id, phase_id, attempt, gate, passed, violations_json,
+                ${checks}, created_at
+           FROM gate_results
+          WHERE adw_id IN (${placeholders}) AND passed = 0
+          ORDER BY id`,
+      )
+      .all(...adwIds);
+    for (const row of rows) {
+      const list = byAdw.get(row.adw_id);
+      if (list) list.push(row);
+      else byAdw.set(row.adw_id, [row]);
+    }
+    return byAdw;
   }
 
   session(adwId: string): Session | null {
@@ -312,11 +347,13 @@ export class SssfDb {
     const session = this.session(adwId);
     if (!session) return null;
 
+    const phases = this.phases(adwId);
     return {
       session,
       usage: this.usage(adwId),
-      phases: this.phases(adwId),
+      phases,
       agents: this.agentSessions(adwId),
+      failure: classifyFailure(session, phases, this.gates(adwId)),
     };
   }
 

@@ -56,6 +56,61 @@ export interface SessionSummary extends Session {
    * so an L1 card can color its per-agent dots without a request per card.
    */
   agents: AgentSession[];
+  /**
+   * Null on a healthy run. Present whenever the phases show a failure — which
+   * includes runs whose `status` still reads "running" because they died before
+   * writing it, so this is the honest signal and `status` is not.
+   */
+  failure: FailureReason | null;
+}
+
+/**
+ * The class of a failure, as decided by server/failure.ts.
+ *
+ * "error" means recognised as a failure but not as a class — the raw message is
+ * shown verbatim. "unknown" means the run failed with nothing written to explain
+ * it, which is a gap in the trace rather than a class of run failure.
+ */
+export type FailureKind =
+  | "guard_readonly"
+  | "guard_allowlist"
+  | "guard_canonical"
+  | "snapshot_budget"
+  | "stale_worktree"
+  | "precommit_hook"
+  | "test_gate"
+  | "timeout"
+  | "hard_kill"
+  | "gate"
+  | "abandoned"
+  | "error"
+  | "unknown";
+
+/**
+ * Why a run failed, in one actionable line.
+ *
+ * Derived on read, never stored: the inputs are `phases.error` and
+ * `gate_results`, which are already written, so every run in the db gets a
+ * reason without a migration or a re-run — including the ones that failed
+ * before this existed.
+ */
+export interface FailureReason {
+  kind: FailureKind;
+  /** One line, safe to truncate — what failed and where. */
+  headline: string;
+  /** The full underlying text, for the detail view. Null when there was none. */
+  detail: string | null;
+  /** What to do about it, when the class is one we know the repair for. */
+  hint: string | null;
+  /** Phase name the failure is attributed to, null when it was outside a phase. */
+  phase: string | null;
+  phase_seq: number | null;
+  /**
+   * Phase rows this run has, so the UI can say "3/6" — but a row is written on
+   * ENTERING a phase, so on a died run this is usually how far it got, not the
+   * manifest length. The UI drops the "/N" unless N is ahead of `phase_seq`.
+   */
+  phase_count: number;
 }
 
 export interface Phase {
@@ -255,6 +310,8 @@ export interface SessionDetail {
    * its agent_start event (coding_agent is null until it finishes).
    */
   agents: AgentSession[];
+  /** Same reason the L1 card shows, so the detail view needs no second call. */
+  failure: FailureReason | null;
 }
 
 /**

@@ -5,6 +5,7 @@ import type {
   AgentStartPayload,
   Envelope,
   EventRow,
+  FailureReason,
   GateResult,
   Phase,
   Session,
@@ -29,6 +30,7 @@ import StatusChip from './StatusChip.vue'
 import StatChip from './StatChip.vue'
 import PhaseDetail from './PhaseDetail.vue'
 import VerticalWaterfall from './VerticalWaterfall.vue'
+import FailureBar from './FailureBar.vue'
 
 const props = defineProps<{ adwId: string; phaseId: string | null }>()
 
@@ -36,6 +38,7 @@ const session = ref<Session | null>(null)
 const phases = ref<Phase[]>([])
 const agents = ref<AgentSession[]>([])
 const usage = ref<SessionUsage>({ read: 0, written: 0 })
+const failure = ref<FailureReason | null>(null)
 const events = ref<EventRow[]>([])
 const envelopes = ref<Envelope[]>([])
 const gates = ref<GateResult[]>([])
@@ -58,6 +61,7 @@ async function tick() {
     phases.value = detail.phases.toSorted((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
     agents.value = detail.agents
     usage.value = detail.usage
+    failure.value = detail.failure
 
     const fresh: EventRow[] = []
     let page
@@ -447,6 +451,8 @@ function selectPhase(p: Phase) {
         <StatChip kind="written" :value="usage.written" />
       </span>
     </div>
+
+    <FailureBar v-if="failure" :failure="failure" />
 
     <VerticalWaterfall
       v-if="phases.length && layoutMode === 'vertical'"
