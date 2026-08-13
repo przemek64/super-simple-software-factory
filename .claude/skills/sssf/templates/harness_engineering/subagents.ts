@@ -24,6 +24,74 @@ import * as os from "os";
 import * as path from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
 
+/**
+ * How to launch pi for a subagent.
+ *
+ * `spawn("pi", …)` is wrong on Windows and fails silently into the transcript:
+ * Node does not apply PATHEXT without a shell, so it never finds `pi.cmd` and
+ * every /sub dies with "spawn pi ENOENT" while the parent agent carries on
+ * as if nothing happened.
+ *
+ * Honoring PI_PATH alone does NOT fix it — Node >= 18.20 refuses to spawn a
+ * .cmd/.bat directly (CVE-2024-27980) and raises EINVAL instead. And
+ * `shell: true` is not an option here: the subagent's prompt is arbitrary free
+ * text passed as an argument, so shell concatenation would make every /sub a
+ * command-injection site.
+ *
+ * So on Windows we do what pi.cmd itself does — run node against pi's own
+ * cli.js, no shell, arguments still passed as an array. Everywhere else a bare
+ * "pi" already resolves, and PI_PATH still wins if it is set.
+ */
+function resolvePiCommand(): { cmd: string; prefix: string[] } {
+	const configured = process.env.PI_PATH?.trim();
+
+	// An explicit .js entrypoint (or PI_CLI_JS) is unambiguous: run it with node.
+	const explicitJs = process.env.PI_CLI_JS?.trim()
+		|| (configured && configured.toLowerCase().endsWith(".js") ? configured : undefined);
+	if (explicitJs && fs.existsSync(explicitJs)) {
+		return { cmd: process.execPath, prefix: [explicitJs] };
+	}
+
+	if (process.platform === "win32") {
+		// The npm global layout pi.cmd itself relies on: <dir>/node_modules/<pkg>/dist/cli.js
+		const fromDir = (dir: string) => path.join(
+			dir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js",
+		);
+		const candidates: string[] = [];
+		if (configured) candidates.push(fromDir(path.dirname(configured)));
+		try {
+			candidates.push(require.resolve("@earendil-works/pi-coding-agent/dist/cli.js"));
+		} catch {
+			// Not resolvable from the extension's context — the other candidates answer it.
+		}
+		// PI_PATH is not guaranteed to reach this process, so find pi on PATH the
+		// way the shell would: walk the entries applying PATHEXT ourselves, since
+		// that is exactly the step Node's spawn skips.
+		const exts = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+		for (const dir of (process.env.PATH || "").split(path.delimiter).filter(Boolean)) {
+			for (const ext of exts) {
+				try {
+					if (fs.existsSync(path.join(dir, `pi${ext}`))) candidates.push(fromDir(dir));
+				} catch {
+					// An unreadable PATH entry is not worth failing the whole resolution over.
+				}
+			}
+		}
+		if (process.env.APPDATA) candidates.push(fromDir(path.join(process.env.APPDATA, "npm")));
+		for (const candidate of candidates) {
+			if (candidate && fs.existsSync(candidate)) {
+				return { cmd: process.execPath, prefix: [candidate] };
+			}
+		}
+		// Nothing resolved. Fall through to the bare name so the failure is the
+		// same visible ENOENT rather than a new and stranger one.
+	}
+
+	return { cmd: configured || "pi", prefix: [] };
+}
+
+const PI_COMMAND = resolvePiCommand();
+
 const FALLBACK_MODEL = "openrouter/google/gemini-3.5-flash";
 const THINKING_OVERRIDES = ["low", "medium", "high", "xhigh"] as const;
 type ThinkingOverride = (typeof THINKING_OVERRIDES)[number];
@@ -226,7 +294,8 @@ export default function (pi: ExtensionAPI) {
 		state.thinking = thinking;
 
 		return new Promise<void>((resolve) => {
-			const proc = spawn("pi", [
+			const proc = spawn(PI_COMMAND.cmd, [
+				...PI_COMMAND.prefix,
 				"--mode", "json",
 				"-p",
 				"--session", state.sessionFile,   // persistent session for /subcont resumption
