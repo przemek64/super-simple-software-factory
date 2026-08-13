@@ -818,6 +818,34 @@ def runtime_exclusions(run) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
         path for path in (db, Path(str(db) + "-wal"), Path(str(db) + "-shm"))
         if canonical == path or canonical in path.parents
     )
+
+    # The visualizer's launcher surfaces, which an OPERATOR edits from the
+    # dashboard while a run is in flight. server/launcher.ts reads
+    # adws/adw_sssf_config/launchers.yaml and serves the diagrams it names, and
+    # the dashboard writes them. They sit beside the config but are not source,
+    # so a human clicking in the UI mid-run surfaced here as "agent modified
+    # canonical checkout state" and killed a healthy build phase 19 minutes in.
+    #
+    # This costs no protection: defaults.protected_files already forbids EVERY
+    # agent from writing adws/adw_sssf_config/ at all, so the guard is not what
+    # was stopping an agent from touching these.
+    #
+    # Untracked only, and checked the same way the db is: excluding a tracked
+    # path would turn operator convenience into a source-monitoring bypass.
+    for relative in (Path("adws/adw_sssf_config/launchers.yaml"),
+                     Path("adws/adw_sssf_config/diagrams")):
+        candidate = (canonical / relative).resolve()
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--", relative.as_posix()], cwd=canonical,
+            capture_output=True,
+        )
+        if listed.returncode != 0 or listed.stdout:
+            continue    # tracked (or git unavailable): keep watching it
+        if relative.name == "diagrams":
+            roots = roots + (candidate,)
+        else:
+            exact = exact + (candidate,)
+
     return roots, exact
 
 
@@ -1300,6 +1328,44 @@ def enforce_safety(run, before: SafetySnapshot) -> None:
         before.close()
 
 
+def _git_ignored(root: Path, paths: list[str]) -> set[str]:
+    """Which of `paths` does git itself ignore, inside `root`?
+
+    `writes` governs what an agent may leave IN THE REPO, and a gitignored file
+    is by definition not in the repo -- it is build output, editor state, or an
+    app's own scratch. Policing it turns any agent that merely RUNS the project
+    into a breach: a planner that started the GUI to read its behaviour failed
+    because labeltool55.py rewrote gui_config.json, an untracked, gitignored
+    file holding window geometry. The agent had done nothing wrong.
+
+    This is not a loophole. .gitignore is itself tracked, so an agent that tried
+    to widen it to cover its own writes would be caught by the very same check
+    on the next comparison.
+
+    check-ignore is asked once for the whole list rather than per path: a phase
+    can touch hundreds of files, and one subprocess per file turned enforcement
+    into the slowest part of a run.
+    """
+    if not paths:
+        return set()
+    # NUL-separated BYTES, not text=True. In text mode Windows rewrites the "\n"
+    # separators to "\r\n" on the way into the pipe, so git is asked about
+    # "gui_config.json\r", matches nothing, and every ignored file is policed
+    # anyway -- a silent no-op that looks exactly like a correct empty result.
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "-z", "--stdin"], cwd=root, capture_output=True,
+            input=b"\0".join(p.encode("utf-8") for p in paths) + b"\0",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()            # no git: fail closed, police everything
+    # 0 = some ignored, 1 = none ignored; anything else is an error, so police all.
+    if result.returncode not in (0, 1):
+        return set()
+    return {chunk.decode("utf-8", "replace").replace("\\", "/")
+            for chunk in result.stdout.split(b"\0") if chunk}
+
+
 def enforce(run, phase, agent: AgentConfig, before: TreeSnapshot) -> list[str]:
     """Compare the tree against `before`; undo and raise if the agent overstepped.
 
@@ -1318,6 +1384,9 @@ def enforce(run, phase, agent: AgentConfig, before: TreeSnapshot) -> list[str]:
         run.work_root, budget=_budget(run), retain_backup=False, **kwargs)
     try:
         touched = changed_paths(before, after)
+        # Drop what git ignores before judging: see _git_ignored.
+        ignored = _git_ignored(Path(run.work_root), touched)
+        touched = [p for p in touched if p.replace("\\", "/") not in ignored]
         breaches = [p for p in touched if not permitted(p, agent, run.cfg)]
         if not breaches:
             return touched
