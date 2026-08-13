@@ -343,6 +343,21 @@ class TwoAxisReview(BaseModel):
     submitted_at: str = ""
     body: str = ""
     findings: list[AxisFindingRef] = Field(default_factory=list)
+    # The commit the axes actually judged, as stamped in the ledger fence. Empty
+    # on a review posted before the stamp existed.
+    head_sha: str = ""
+
+    def matches_head(self, head_sha: str) -> bool:
+        """Was this review written against `head_sha`?
+
+        Unstamped reviews return True: they predate the stamp, and refusing them
+        would turn an old-but-valid review into a hard stop. A stamped review of
+        a different commit is a review of code that no longer exists, and saying
+        so is the whole point of carrying the sha.
+        """
+        if not self.head_sha or not head_sha:
+            return True
+        return self.head_sha[:12] == head_sha[:12]
 
 
 # The machine-readable half of a posted two-axis review, fenced by sentinels
@@ -351,16 +366,27 @@ class TwoAxisReview(BaseModel):
 # word "None." — a heading-anchored parser read that and stopped before the real
 # ledger, reporting zero findings from a review that had two. These comments
 # render as nothing on GitHub and prose does not produce them by accident.
-LEDGER_BEGIN = "<!-- sssf:two-axis-findings:begin -->"
+LEDGER_BEGIN = "<!-- sssf:two-axis-findings:begin"
 LEDGER_END = "<!-- sssf:two-axis-findings:end -->"
-RE_AXIS_LEDGER = re.compile(re.escape(LEDGER_BEGIN) + r"(?P<body>.*?)"
-                            + re.escape(LEDGER_END), re.S)
+# The opening fence may carry the sha the axes judged: "...:begin sha=abc123 -->".
+RE_AXIS_LEDGER = re.compile(re.escape(LEDGER_BEGIN) + r"(?P<attrs>[^>]*)-->"
+                            r"(?P<body>.*?)" + re.escape(LEDGER_END), re.S)
+RE_LEDGER_SHA = re.compile(r"sha=(?P<sha>[0-9a-f]{7,40})")
 RE_AXIS_FINDING = re.compile(r"^### \[(?P<id>[0-9a-f]{12})\]\s*(?P<title>.*?)\s*$",
                              re.M)
 RE_AXIS_FIELD = re.compile(r"^- \*\*(?P<key>axis|severity|kind|location)\*\*:\s*(?P<value>.*?)\s*$",
                            re.M)
 # One path segment ending in an extension: "tests/x_test.py", "docs/adr/0013-x.md".
 RE_LOOKS_LIKE_PATH = re.compile(r"[\w.\-/\\]+\.\w{1,8}")
+
+
+def parse_ledger_sha(body: str) -> str:
+    """The sha stamped in the ledger fence, or "" when the review carries none."""
+    section = RE_AXIS_LEDGER.search((body or "").replace('\r\n', '\n'))
+    if not section:
+        return ""
+    found = RE_LEDGER_SHA.search(section.group("attrs") or "")
+    return found.group("sha") if found else ""
 
 
 def parse_two_axis_findings(body: str) -> list[AxisFindingRef]:
@@ -396,27 +422,50 @@ def parse_two_axis_findings(body: str) -> list[AxisFindingRef]:
     return findings
 
 
-def two_axis_ready(pr: int, *, repo: str, cwd: Path) -> bool:
-    """Has a two-axis review landed on this PR?"""
-    reviews = _api(f"repos/{repo}/pulls/{pr}/reviews", cwd=cwd)
-    return any(MARKER_TWO_AXIS in (r.get("body") or "") for r in reviews)
+def two_axis_ready(pr: int, *, repo: str, cwd: Path, head_sha: str = "") -> bool:
+    """Has a two-axis review of THIS head landed on this PR?
 
-
-def capture_two_axis(pr: int, *, repo: str, cwd: Path) -> TwoAxisReview:
-    """Freeze the newest two-axis review. Raises if none has landed."""
+    With `head_sha` given, a review that stamped a different commit does not
+    count as ready — it judged code that is no longer there, and accepting it
+    would let a fix run rule on findings about a diff nobody is proposing any
+    more. Without it, or against a review posted before the stamp existed, the
+    old behaviour stands: any two-axis review counts.
+    """
     reviews = [r for r in _api(f"repos/{repo}/pulls/{pr}/reviews", cwd=cwd)
                if MARKER_TWO_AXIS in (r.get("body") or "")]
+    if not head_sha:
+        return bool(reviews)
+    return any(_ledger_matches(r.get("body") or "", head_sha) for r in reviews)
+
+
+def _ledger_matches(body: str, head_sha: str) -> bool:
+    stamped = parse_ledger_sha(body)
+    return not stamped or stamped[:12] == head_sha[:12]
+
+
+def capture_two_axis(pr: int, *, repo: str, cwd: Path, head_sha: str = "") -> TwoAxisReview:
+    """Freeze the newest two-axis review of this head. Raises if none has landed.
+
+    The head filter runs BEFORE "newest wins": a stale review posted after a
+    fresh one — a re-run of the axes against an older commit — would otherwise
+    win on timestamp and quietly replace the review that actually matches.
+    """
+    reviews = [r for r in _api(f"repos/{repo}/pulls/{pr}/reviews", cwd=cwd)
+               if MARKER_TWO_AXIS in (r.get("body") or "")
+               and (not head_sha or _ledger_matches(r.get("body") or "", head_sha))]
     if not reviews:
-        raise CodeRabbitError(f"no two-axis review on PR #{pr}")
+        raise CodeRabbitError(f"no two-axis review on PR #{pr}"
+                              + (f" for head {head_sha[:12]}" if head_sha else ""))
     newest = max(reviews, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0))
     body = newest.get("body") or ""
     return TwoAxisReview(pr=pr, review_id=int(newest["id"]),
                          submitted_at=newest.get("submitted_at") or "",
-                         body=body, findings=parse_two_axis_findings(body))
+                         body=body, findings=parse_two_axis_findings(body),
+                         head_sha=parse_ledger_sha(body))
 
 
 def await_reviews(pr: int, *, repo: str, cwd: Path, timeout_seconds: float = 900.0,
-                  interval_seconds: float = 30.0, on_poll=None
+                  interval_seconds: float = 30.0, on_poll=None, head_sha: str = ""
                   ) -> tuple[Optional[RabbitReview], Optional[TwoAxisReview]]:
     """Wait for BOTH reviewers, then freeze both as one contract.
 
@@ -433,14 +482,15 @@ def await_reviews(pr: int, *, repo: str, cwd: Path, timeout_seconds: float = 900
     deadline = time.monotonic() + timeout_seconds
     while True:
         rabbit_state = status(pr, repo=repo, cwd=cwd)
-        axis_state = "ready" if two_axis_ready(pr, repo=repo, cwd=cwd) else "absent"
+        axis_state = ("ready" if two_axis_ready(pr, repo=repo, cwd=cwd, head_sha=head_sha)
+                      else "absent")
         if on_poll:
             on_poll(rabbit_state, axis_state, max(0.0, deadline - time.monotonic()))
         if rabbit_state == "skipped":
             return None, None
         if rabbit_state == "ready" and axis_state == "ready":
             return (capture(pr, repo=repo, cwd=cwd),
-                    capture_two_axis(pr, repo=repo, cwd=cwd))
+                    capture_two_axis(pr, repo=repo, cwd=cwd, head_sha=head_sha))
         if time.monotonic() >= deadline:
             return None, None
         time.sleep(min(interval_seconds, max(1.0, deadline - time.monotonic())))

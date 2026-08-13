@@ -236,7 +236,7 @@ diff is faithful to the spec.
 # before the real ledger. These render as nothing on GitHub and no reviewer
 # writing prose will emit them by accident. Kept identical to the constants in
 # adw_modules/coderabbit.py, which is the only thing that reads them back.
-LEDGER_BEGIN = "<!-- sssf:two-axis-findings:begin -->"
+LEDGER_BEGIN = "<!-- sssf:two-axis-findings:begin"
 LEDGER_END = "<!-- sssf:two-axis-findings:end -->"
 
 
@@ -271,7 +271,7 @@ def assign_ids(axis: AxisOutput) -> AxisOutput:
     return axis
 
 
-def _ledger(standards: AxisOutput, spec: AxisOutput) -> str:
+def _ledger(standards: AxisOutput, spec: AxisOutput, head_sha: str = "") -> str:
     """Every finding from both axes, one heading each, carrying its id.
 
     This is the half of the posted review that a machine reads. The prose reports
@@ -280,7 +280,12 @@ def _ledger(standards: AxisOutput, spec: AxisOutput) -> str:
     rather than a wall of text. The `### [id]` shape matches the rabbit handoff
     format on purpose — one parser shape, one ruling vocabulary.
     """
-    lines = [LEDGER_BEGIN, "",
+    # The reviewed commit travels WITH the findings. A fix run reads this review
+    # off the PR long after it was written, and a review of an older head is a
+    # review of code that no longer exists — the fence says which commit it
+    # judged so that can be checked rather than assumed.
+    opening = f"{LEDGER_BEGIN} sha={head_sha[:40]} -->" if head_sha else f"{LEDGER_BEGIN} -->"
+    lines = [opening, "",
              "## Findings (the ruling set)", "",
              "One heading per finding, from both axes. The id is stable for the "
              "same finding on the same diff; rule on every one of them.", ""]
@@ -308,7 +313,7 @@ def _ledger(standards: AxisOutput, spec: AxisOutput) -> str:
 
 
 def assemble(sources: Sources, *, pr: int, issue: str,
-             standards: AxisOutput, spec: AxisOutput) -> None:
+             standards: AxisOutput, spec: AxisOutput, head_sha: str = "") -> None:
     """Concatenate the two reports under two headings. Code, not an agent:
     a concatenation cannot rerank one axis against the other or invent a finding."""
     def report(axis: AxisOutput, fallback: Path) -> str:
@@ -457,7 +462,8 @@ def review_pr_two_axis(*, pr: int, standards_agent: str, spec_agent: str,
             # them, so an unlabelled finding would silently drop out of the set.
             assign_ids(standards)
             assign_ids(spec)
-            assemble(sources, pr=pr, issue=issue, standards=standards, spec=spec)
+            assemble(sources, pr=pr, issue=issue, standards=standards, spec=spec,
+                     head_sha=head_sha)
             verdict = verdict_of(standards, spec)
             record = {"schema": "sssf-review/1", "review": "two-axis", "pr": pr,
                       "repo": repo, "issue": issue or None, "head_sha": head_sha,

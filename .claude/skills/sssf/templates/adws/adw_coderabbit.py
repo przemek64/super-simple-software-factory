@@ -156,8 +156,14 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
         with run.phase(PhaseParams(name="await_review", kind="code", owner="git",
                                    description="Wait for BOTH reviewers to finish, then "
                                                "freeze the pair as this run's contract")) as ph:
+            # The head the fix will land on. Handed to the gate so a two-axis
+            # review of an older commit does not count as ready: it judged code
+            # that is no longer there, and its findings would be ruled on as if
+            # they described the diff under repair.
+            head_sha = _gh_json(f"repos/{repo}/pulls/{pr}", ".head.sha", cwd=repo_root)
+            ph.log(head_sha=head_sha[:12])
             review, axis_review = coderabbit.await_reviews(
-                pr, repo=repo, cwd=repo_root,
+                pr, repo=repo, cwd=repo_root, head_sha=head_sha,
                 timeout_seconds=timeout_seconds, interval_seconds=interval_seconds,
                 on_poll=lambda rabbit, axis, left: ph.log(
                     rabbit=rabbit, two_axis=axis, seconds_left=int(left)))
