@@ -11,11 +11,18 @@
  *   SSSF_DB=/path/to/sssf.db PORT=4600 bun run server/index.ts
  */
 import { existsSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
 import type { AgentPrompts, ApiError, HealthResponse } from "../shared/types.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
+
+/** The repo a db belongs to: <repo>/adws/adw_runtime/sssf.db → "<repo>".
+ *  Derived from the db path rather than cwd, because the server is started from
+ *  its own app directory and the db is pointed at with SSSF_DB. */
+function repoNameFor(dbFile: string): string {
+  return basename(resolve(dirname(dbFile), "..", "..")) || "repo";
+}
 const DIST_DIR = resolve(import.meta.dir, "..", "dist");
 
 const dbPath = resolveDbPath();
@@ -120,6 +127,7 @@ const server = Bun.serve({
           db: db.path,
           journal_mode: db.journalMode,
           sessions: db.sessionCount(),
+          repo: repoNameFor(db.path),
         } satisfies HealthResponse),
     ),
 
@@ -203,7 +211,7 @@ console.log(`[sssf] db              ${db.path}  [journal_mode=${db.journalMode}]
 console.log(
   existsSync(DIST_DIR)
     ? `[sssf] serving ui from  ${DIST_DIR}`
-    : `[sssf] no ./dist — use "bun run dev" for the Vite dev server on :4601`,
+    : `[sssf] no ./dist — use "bun run dev" for the Vite dev server on :${process.env.VITE_PORT ?? 4601}`,
 );
 
 process.on("SIGINT", () => {

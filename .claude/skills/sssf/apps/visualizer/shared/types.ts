@@ -299,6 +299,9 @@ export interface HealthResponse {
   db: string;
   journal_mode: string;
   sessions: number;
+  /** Folder name of the repo this db belongs to — the UI titles itself with it,
+   *  so two factories open side by side are tellable apart. */
+  repo: string;
 }
 
 export interface ApiError {

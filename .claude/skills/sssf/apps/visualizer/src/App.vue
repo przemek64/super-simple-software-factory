@@ -1,11 +1,27 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { Columns3, Rows3 } from 'lucide-vue-next'
+import { fetchHealth } from './lib/api'
 import { useRoute, hrefFor, phaseCrumb } from './lib/router'
 import { layoutMode } from './lib/view'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
 
 const route = useRoute()
+
+// Which repo this UI is pointed at. Two factories are usually open at once and
+// the pages are otherwise identical, so the folder name is what tells them
+// apart. Health carries it; it never changes, so this is fetched once.
+const repo = ref('')
+onMounted(async () => {
+  try {
+    repo.value = (await fetchHealth()).repo
+    // The browser tab is the other place two open factories look identical.
+    if (repo.value) document.title = `${repo.value} — sssf`
+  } catch {
+    repo.value = '' // the banner already reports an unreachable api
+  }
+})
 
 function toggleLayout() {
   layoutMode.value = layoutMode.value === 'vertical' ? 'horizontal' : 'vertical'
@@ -24,6 +40,10 @@ function toggleLayout() {
           <rect x="4" y="21" width="13" height="5" rx="2.5" fill="#5ad2dd" />
         </svg>
         <span class="brand">Super Simple Software Factory</span>
+        <template v-if="repo">
+          <span class="sep">›</span>
+          <span class="repo" :title="`this factory reads ${repo}`">{{ repo }}</span>
+        </template>
         <span class="sep">›</span>
         <a :href="hrefFor()" :class="{ current: !route.adwId }">sessions</a>
         <template v-if="route.adwId">
@@ -110,6 +130,16 @@ function toggleLayout() {
   color: transparent;
   font-weight: 700;
   letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.repo {
+  /* Deliberately louder than the brand beside it: this is the one word that
+     differs between two otherwise identical windows. */
+  color: var(--amber);
+  font-weight: 700;
+  font-size: 1.35em;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
