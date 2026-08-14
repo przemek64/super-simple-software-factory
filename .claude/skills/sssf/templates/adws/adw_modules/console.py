@@ -8,6 +8,7 @@ so a CI log reads exactly like a terminal.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from rich.console import Console as RichConsole
@@ -26,6 +27,31 @@ def _clip(text: str, limit: int = MAX_LINE) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _utf8_stream(stream=None):
+    """Make stdout able to carry the characters this module always prints.
+
+    Every phase header starts with `▶`, the summary is a box-drawing panel, and
+    `_clip` ends long lines with `…`. On Windows a process that inherits a
+    cp1252 stdout -- which is what a detached `Start-Process` gets unless the
+    caller exports PYTHONIOENCODING -- raises UnicodeEncodeError on the FIRST
+    printed line and the run dies before it does any work. Two review ADWs were
+    lost that way in one session, each looking like an instant silent crash.
+
+    The encoding is the caller's console, but the characters are ours, so this
+    is ours to guarantee. `errors="replace"` keeps a stream that cannot be
+    reconfigured (a mock, a closed pipe) from turning output into a crash.
+    """
+    stream = sys.stdout if stream is None else stream
+    reconfigure = getattr(stream, "reconfigure", None)
+    encoding = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
+    if reconfigure is not None and encoding not in {"utf8", "utf8sig"}:
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError, LookupError):
+            pass
+    return stream
+
+
 class Console:
     """Bound to one run's tracer. Reachable as `run.console` everywhere."""
 
@@ -36,7 +62,8 @@ class Console:
         self.phase_name = ""
         self.results: list[str] = []            # phase statuses, for the summary
         self._finished = False                  # the summary panel prints once
-        self._out = RichConsole(highlight=False, soft_wrap=True)
+        self._out = RichConsole(highlight=False, soft_wrap=True,
+                                file=_utf8_stream())
 
     # ── the one helper: print AND trace, always together ────────────────────
     def _emit(self, markup: str, level: str = "info", renderable=None) -> None:

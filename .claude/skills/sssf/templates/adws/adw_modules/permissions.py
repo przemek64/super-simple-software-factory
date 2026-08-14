@@ -1152,6 +1152,24 @@ def snapshot(run) -> TreeSnapshot:
     return result
 
 
+def _root_vanished(root: Path, canonical: Path) -> bool:
+    """Has a SIBLING root stopped existing since it was registered?
+
+    `git worktree remove`, `git worktree prune`, or an operator clearing disk
+    space deletes a directory this snapshot recorded. Re-walking it then fails
+    with FileNotFoundError -- or `[WinError 267] The directory name is invalid`
+    on Windows -- and a healthy phase is failed for something the agent never
+    touched. Run c46e2e14 died exactly that way at `build`, 19 minutes and 1.6M
+    tokens in, because 21 stale worktrees were pruned while it ran.
+
+    A sibling that is gone has nothing left to protect, so skipping it loses no
+    safety. The canonical checkout is not the same case: if THAT vanished the
+    run has lost the ground truth it is being judged against, and it must still
+    fail loudly.
+    """
+    return _path_key(root) != _path_key(canonical) and not root.is_dir()
+
+
 def safety_snapshot(run) -> SafetySnapshot:
     """Capture canonical and siblings while the cross-process guard is held."""
     from .worktree import registered_worktrees
@@ -1172,7 +1190,15 @@ def safety_snapshot(run) -> SafetySnapshot:
             kwargs = ({"excluded_roots": excluded_roots,
                        "excluded_paths": excluded_paths}
                       if _path_key(root) == _path_key(canonical) else {})
-            snapshots[root] = snapshot_root(root, budget=budget, **kwargs)
+            if _root_vanished(root, canonical):
+                continue
+            try:
+                snapshots[root] = snapshot_root(root, budget=budget, **kwargs)
+            except (OSError, SnapshotLimitExceeded):
+                # Re-check rather than assume: a budget breach or a real I/O
+                # failure must still raise. Only a root that is gone is excused.
+                if not _root_vanished(root, canonical):
+                    raise
         _register_snapshot(run, snapshots)
         return snapshots
     except BaseException:
@@ -1327,8 +1353,19 @@ def enforce_safety(run, before: SafetySnapshot) -> None:
             kwargs = ({"excluded_roots": excluded_roots,
                        "excluded_paths": excluded_paths}
                       if _path_key(root) == _path_key(canonical) else {})
+            if _root_vanished(root, canonical):
+                # Removed between baseline and re-walk. Nothing to compare, and
+                # nothing the agent could be held to inside a directory that no
+                # longer exists.
+                continue
             # The comparison needs only metadata/hashes, never a second backup.
-            after = snapshot_root(root, budget=comparison_budget, retain_backup=False, **kwargs)
+            try:
+                after = snapshot_root(root, budget=comparison_budget,
+                                      retain_backup=False, **kwargs)
+            except (OSError, SnapshotLimitExceeded):
+                if not _root_vanished(root, canonical):
+                    raise
+                continue
             try:
                 changed = changed_paths(prior, after)
                 # Same rule as the write-allowlist: what git ignores is not part
