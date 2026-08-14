@@ -114,8 +114,15 @@ _MUTATOR_SAFE_OPTIONS = {
 # absent -- they are awk/jq program syntax, and refusing them refused the whole
 # tool for no safety gain. Under the path-bounded policy (see _analyze_bash) an
 # unrecognised COMMAND is no longer a reason to refuse; an unreadable PATH is.
+#
+# `$` is judged by what FOLLOWS it, for the same reason. A name, a brace or a
+# paren can expand to a path nobody can read here, so those stay refused. The
+# rest of what `$` introduces cannot name anything: `$?` is an exit status,
+# `$$` a pid, `$1` an awk field, and a trailing `$` is a regex anchor. Blocking
+# the character outright refused three of one builder's twenty-one commands --
+# all of them `echo "---exit:$?---"` -- and burned a retry each time.
 _BASH_DYNAMIC_RE = re.compile(
-    r"[`$]|%[^%\s]+%|![^!\s]+!|[<>]\(", re.IGNORECASE
+    r"`|\$[A-Za-z_({]|%[^%\s]+%|![^!\s]+!|[<>]\(", re.IGNORECASE
 )
 # Any absolute path written literally anywhere in a command, including inside a
 # quoted interpreter one-liner. This is what keeps `python -c "open('C:/x','w')"`
