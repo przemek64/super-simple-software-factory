@@ -4,6 +4,19 @@ import type { SessionSummary } from '../lib/types'
 import { fetchSessions } from '../lib/api'
 import { ts } from '../lib/format'
 import SessionCard from './SessionCard.vue'
+import SessionRow from './SessionRow.vue'
+
+// Two shapes for the same list: tiles for browsing, rows for scanning many runs.
+// Remembered per browser — the choice is a working preference, not a route, so
+// it should survive a reload without turning into a shareable url.
+const VIEW_KEY = 'sssf.sessions.view'
+type ViewMode = 'rows' | 'cards'
+const view = ref<ViewMode>(localStorage.getItem(VIEW_KEY) === 'cards' ? 'cards' : 'rows')
+
+function setView(mode: ViewMode) {
+  view.value = mode
+  localStorage.setItem(VIEW_KEY, mode)
+}
 
 const sessions = shallowRef<SessionSummary[]>([])
 const apiError = ref<string | null>(null)
@@ -53,9 +66,39 @@ const ordered = computed(() =>
   <div class="sessions">
     <div v-if="apiError" class="error-bar">api unreachable — retrying {{ apiError }}</div>
 
-    <div v-if="ordered.length" class="list-head dim">{{ ordered.length }} runs</div>
+    <div v-if="ordered.length" class="list-head">
+      <span class="dim">{{ ordered.length }} runs</span>
+      <span class="view-switch">
+        <button
+          type="button"
+          :class="{ on: view === 'rows' }"
+          title="Compact rows — every run on two lines"
+          @click="setView('rows')"
+        >
+          rows
+        </button>
+        <button
+          type="button"
+          :class="{ on: view === 'cards' }"
+          title="Tiles — one card per run"
+          @click="setView('cards')"
+        >
+          tiles
+        </button>
+      </span>
+    </div>
 
-    <div v-if="ordered.length" class="cards">
+    <div v-if="ordered.length && view === 'rows'" class="rows">
+      <SessionRow
+        v-for="s in ordered"
+        :key="s.adw_id"
+        :session="s"
+        :now-ms="nowMs"
+        @archived="onArchived"
+      />
+    </div>
+
+    <div v-else-if="ordered.length" class="cards">
       <SessionCard
         v-for="s in ordered"
         :key="s.adw_id"
@@ -76,8 +119,41 @@ const ordered = computed(() =>
 }
 
 .list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 16px 24px 0;
   font-size: 16px;
+}
+
+.view-switch {
+  display: inline-flex;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.view-switch button {
+  padding: 3px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.view-switch button.on {
+  background: rgba(148, 163, 255, 0.16);
+  color: var(--text);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 24px 28px;
 }
 
 .cards {
