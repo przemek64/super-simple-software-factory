@@ -264,9 +264,12 @@ Recorded because they will look like factory bugs from the outside.
 
 ## 4. Known gaps
 
-### 4.1 The round cap promises the decider and never calls it — ITEM STUCK
+### 4.1 The round cap promises the decider and never calls it — FIXED 2026-08-16
 
-The highest-priority bug, and it is currently affecting issue #4.
+Fixed in the follow-up session; see §7.1. Kept here because the diagnosis is
+still the clearest statement of what went wrong.
+
+The highest-priority bug, and it was blocking issue #4.
 
 ```
 skipped: #4: 2 rounds spent -> decider
@@ -371,3 +374,143 @@ commit  ->  verify clean tree  ->  launch  ->  do not touch that checkout
 
 A second checkout, or a different repository, is safe to work in meanwhile —
 this report was written during a live run, in this repo, for that reason.
+
+---
+
+## 7. Follow-up session, 2026-08-16
+
+Picked up from the handoff. Goal: clear issue #4 and get #5 running. Everything
+below was found by driving one real item, not by reading the code.
+
+### 7.1 The round cap now reaches the decider (§4.1)
+
+`decide()` ran only when every stage was done. The round-cap path in `select()`
+reported `-> decider` and then `continue`d, so an item that spent its rounds was
+never launched and never judged. Both routes now go through one `_judge()`
+helper, so neither can grow its own handling.
+
+Confirmed on the live item the moment it was in place:
+
+```
+notes: #4 (2 rounds spent): decider escalated -- 1 blocking finding(s) ...
+notes: would launch #5 p1 adws/adw_simple_sdlc.py
+```
+
+Two consequences fell out of routing more items to the decider:
+
+- **Escalation had no dedupe.** An item waiting on a person is re-judged every
+  tick, so one unresolved blocker would page the operator once per tick all
+  night. `decide()` now takes the fingerprint of the last escalation sent and
+  withholds an identical one. A different blocker still gets through.
+- **A dry run reported a false error.** `plan` sends nothing, so an unset
+  `escalated` there means "withheld", not "the daemon is down".
+
+### 7.2 Inline comments were pinned to the wrong commit — this is the subtle one
+
+`collect_findings` ignores anything not pinned to the current head. That rule
+works for reviews and silently fails for inline comments.
+
+**GitHub re-pins an unresolved inline comment to each new head** while the line
+it anchors to still exists. So `commit_id` tracks the branch, not the moment the
+objection was raised. Observed directly on PR #92:
+
+| comment | created | `original_commit_id` | `commit_id` |
+|---|---|---|---|
+| 3783151146 | 08-14 | `d404e317` | `5ae24f97` |
+| 3783151152 | 08-14 | `d404e317` | `5ae24f97` |
+
+Both were written against `d404e31` and fixed two commits later, and both
+reported the current head. The decider counted a repaired finding as a live
+blocker on every tick — an item that could never clear. Comments now pin on
+`original_commit_id`, which does not move. Reviews were always correct: their
+`commit_id` is frozen at submission.
+
+### 7.3 Fixing that opened a worse hole: an unreviewed head merged
+
+With comments correctly excluded, a freshly pushed head has no findings — and
+the decider merged when it found no blocking findings. **"Nothing objected" and
+"nobody has looked yet" were the same observation.** Every push lands in that
+state until the external reviewer catches up, so a new head was briefly
+mergeable whatever was in it, and the stricter pinning *widened* that window.
+
+Merging now requires an external review OF the current head. `external_review()`
+already existed for p3's input and expresses exactly this.
+
+This is the second time the same shape of bug has appeared here: §2.2 read a
+review with findings as empty, and this read an unreviewed head as clean. Both
+turned absence of evidence into evidence of absence.
+
+### 7.4 The decider tests were reaching live GitHub
+
+The check in §7.3 was passing its tests because PR #92 was still open with a
+CodeRabbit review pinned to the `HEAD` constant hard-coded in the test file —
+the suite was reading production. It would have flipped the moment that PR
+merged. Stubbed. Worth a sweep for others: the tell was the suite slowing from
+5s to 11s.
+
+### 7.5 The factory had no notion of a dependency
+
+`select()` is FIFO over the entry label, and these issues chain:
+
+```
+#4 -> #5 -> #6 -> #7        #4 -> #8        #4 -> #9        #79 independent
+```
+
+Nothing stopped it starting #5 the moment #4 merely had a *branch*. A branch cut
+from main before its parent merges does not contain the code it extends, so the
+agent fights absent code and the retest failure is charged to it — §2.8's
+misattribution again, with a worse cause.
+
+`select()` now reads the `Depends-on:` declaration the migration tooling writes
+and holds an item while any dependency is open. Unreadable state counts as
+unmet: not knowing is not the same as done. Live:
+
+```
+skipped: #5: waiting on #4      skipped: #8: waiting on #4
+skipped: #6: waiting on #5      skipped: #9: waiting on #4
+skipped: #7: waiting on #6      would launch #79 p1
+```
+
+This also corrects the plan for the night. #5 cannot start until #4 *merges*,
+not merely until #4 is reviewed.
+
+### 7.6 On PR #92 itself
+
+The Major finding from review 4945224522 was real: the operator-edit exclusion
+for `launchers.yaml` and `diagrams/` was applied to the snapshot, so in direct
+enforcement (`work_root == repo_root`) those paths never reached
+`changed_paths`, `permitted()` was never asked, and `protected_files` could not
+forbid a write the guard had already discarded. An agent in the canonical
+checkout could rewrite either surface with no breach and no rollback — the
+opposite of what the code comment claimed.
+
+`runtime_exclusions()` now takes `visualizer_surfaces`, default off; only the
+two cross-worktree safety-monitoring call sites opt in. The exclusion keeps its
+value exactly where it was earned. The cost, stated: a run working directly in
+the canonical checkout will again fail on a mid-run operator edit. That is the
+correct trade — there the operator and the agent write the same tree and are
+genuinely indistinguishable, and a false failure is cheaper than a silent
+unguarded write to a protected path.
+
+Verified by running the new regression test against the unfixed file:
+`DID NOT RAISE PermissionBreach`.
+
+The other Major on the PR, "a transient write error drops the unwritten
+suffix", was **already fixed** in `b77be46` and dismissed with the check
+written into the thread. It is the case §2.9 warns about, seen from the other
+side: an artifact that disagrees with a stale report.
+
+### 7.7 Still open
+
+- **The retest baseline (§2.8) is still not built.** Deliberately not attempted
+  here: changing the test gate immediately before unattended runs risks failing
+  every run tonight, and the branch for #5 is cut from a freshly merged main, so
+  it starts green. It remains the right next piece of work.
+- **Four stale worktrees were NOT pruned.** The handoff called all four safe,
+  but two (`pr92-302b6e3d`, `pr92-979ee6bb`) hold uncommitted agent work from
+  the two failed runs. With 29 GB free there was no reason to delete unexamined
+  work. `pr92-a62ee3c7` holds only CRLF churn on three `Ti55_*.def` files.
+- **Console windows (§2.7) still unconfirmed.**
+- The `.archive/` version-snapshot convention now covers `tty_bridge.py` at
+  1.0.3; `adws_factory` carries `__version__` but no archive copies, matching
+  how the package was already committed.
