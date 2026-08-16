@@ -14,12 +14,18 @@ recorded below.
 ## 1. Where things stand
 
 The orchestration layer exists, is committed, has 168 offline tests, and has
-launched real runs. The decider rules on finished items but cannot yet verify a
-blocking finding, so it escalates instead.
+driven a real item end to end through a stage. The decider rules on finished
+items but cannot yet verify a blocking finding, so it escalates instead.
 
-**As of the end of the session a live run is in flight**: `a62ee3c7`, stage p3
-(`adw_coderabbit.py`) on issue #4 / PR #92, launched 2026-08-16T01:45Z. Its
-outcome is not in this report.
+**Two live runs were launched this session.** `106602c5` was killed by an
+editing mistake (§2.6). `a62ee3c7` completed all five phases, fixed all seven
+accepted findings, and was recorded `fail` on the retest — see §2.8, which is
+the most useful thing in this document.
+
+**Issue #4 / PR #92 as of the end of the session:** PR head is `b77be463`, six
+commits, suite green at 433 passed / 24 skipped / 0 failed. The item has fallen
+back to **p2** because the new head made the previous review stale, and it is
+currently **stuck there** by the bug in §4.1.
 
 ### Commits
 
@@ -168,6 +174,77 @@ Changed to `CREATE_NO_WINDOW` in `498698d`. **Not yet confirmed fixed** — the
 grandchildren rather than the process whose flags we control. Needs a human to
 say whether windows still appear.
 
+### 2.8 A fix run failed for something that was already broken
+
+Run `a62ee3c7` (p3 on PR #92) completed all five phases:
+
+```
+✓ triage   191s   ruled on 14 findings, accepted 7
+✓ fix     1644s   builder zai/glm-5.2, 1,083,904 tokens
+  ✓ gate accepted_findings_touched(7 accepted) 7 checked
+✓ retest   144s   1 failed, 360 passed, 24 skipped
+✗ status fail — "the suite or the review never came back clean"
+```
+
+The builder did the work correctly — all seven accepted findings repaired,
+including the four `Major` blockers, with the gate confirming every location was
+in the diff. This is the same gate that failed in `979ee6bb`, where the builder
+reverted a file instead of fixing it.
+
+It failed on one test: `test_every_phase_a_entry_checks_base_before_bootstrap`.
+That test was **already red on that branch**, because PR #92's branch was cut
+before the interpreter and environment fixes and never received them:
+
+```
+git merge-base --is-ancestor b4e5ce0 <pr92-branch>   ->  NO
+```
+
+The branch turned out to be **8 commits behind `main`** as well, missing the
+tracked `adws/adw_sssf_config/diagrams/` directory that four more tests expect.
+So the branch was red for two independent reasons, neither of them the agent's.
+
+**Resolution.** Rather than re-run p3 and spend another 1.6M tokens reproducing
+work that was already done, the builder's output was salvaged from its worktree:
+
+1. committed the seven fixes (`.archive/` is gitignored and correctly excluded;
+   three `Ti55_*.def` files showed modified but had no content diff — CRLF churn
+   only, left out)
+2. cherry-picked `b4e5ce0`
+3. merged `origin/main` — no deletions
+4. suite went **433 passed / 24 skipped / 0 failed**, green for the first time
+5. pushed `d404e31..b77be46`
+
+**The general lesson, and it is the important one:** the retest gate cannot tell
+"the agent broke it" from "it was already broken". Any branch that is behind its
+base will fail retest forever, and each failure looks like the agent's fault.
+The fix is a baseline — record the failing set at run start and count only *new*
+failures. Without it, the convergence rule never terminates on a stale branch,
+which is exactly what the previous session's handoff predicted.
+
+A second-order consequence: `classify_failure` reads `1 failed` and calls it a
+**work** failure, so a stale branch would burn an item's whole attempt budget
+and park it `blocked` for something it never did. Only the artifact check
+(ADR-0003) saved #4 here.
+
+### 2.9 What ADR-0003 was worth, measured
+
+On the tick after the push:
+
+```
+reaped: a62ee3c7 p3 on #4: artifact present (freed 562 MB)
+```
+
+The run was recorded `fail`. The artifact check said the work landed, so the
+stage reaped as done and spent **zero** work budget — #4 remained at 0/3
+attempts across two "failed" runs. This is the disagreement ADR-0003 was written
+for, observed in production rather than in a fixture.
+
+The retention code (§2.1) also fired on that reap and freed 562 MB.
+
+Staleness fired correctly too: the new head meant CodeRabbit's review
+`4936552185` no longer pinned to it, so p3 had nothing left to consume and the
+item fell back to p2 for a fresh review.
+
 ---
 
 ## 3. Findings that are not ours to fix
@@ -186,6 +263,30 @@ Recorded because they will look like factory bugs from the outside.
 ---
 
 ## 4. Known gaps
+
+### 4.1 The round cap promises the decider and never calls it — ITEM STUCK
+
+The highest-priority bug, and it is currently affecting issue #4.
+
+```
+skipped: #4: 2 rounds spent -> decider
+```
+
+`decide()` is only invoked when *every* stage is done. The round-cap path in
+`select()` merely skips the item and moves on, so an item that exhausts its
+rounds is never launched and never judged. It is skipped silently, forever.
+
+Nothing caught this because every test had either all stages done or none;
+it took a real item reaching the round limit to surface it.
+
+**#4 is in that hole right now.** Its legitimate next step is a p2 re-review of
+head `b77be463`, and the round cap is blocking it.
+
+Fix: call `decide()` on the round-cap path, which is what the message already
+promises. Alternatively make "rounds exhausted" a first-class terminal state
+that routes to the decider.
+
+### 4.2 The rest
 
 **The decider cannot verify a blocking finding.** ADR-0002 wants it to check
 each blocker against the code and dismiss the false ones. It escalates instead.
@@ -240,11 +341,33 @@ is FIFO over the entry label. This mattered once already, when a stray
 
 ## 6. Suggested next steps
 
-1. Land the in-flight `a62ee3c7` and read what it did — the first genuine
-   end-to-end exercise of p3.
-2. Confirm or fix the console-window problem (2.7).
-3. Build the decider's verification agent (§4). Largest remaining piece.
-4. Close the `PermissionBreach` classification gap (§4).
-5. File the three SSSF issues in §3, starting with the `data_dir` exclusion —
-   it is one line of blast radius and a 10x disk saving.
-6. Add `--item` to the CLI so a specific issue can be forced.
+Ordered by what is blocking what.
+
+1. **Fix §4.1** — issue #4 is stuck behind it and cannot advance until it is
+   done. Smallest fix on this list, largest immediate effect.
+2. **Add a retest baseline** (§2.8) — record the failing set at run start and
+   count only new failures. Without it any branch behind its base fails forever
+   and the agent is blamed. This is the difference between the factory being
+   usable on real branches and not.
+3. Confirm or fix the console-window problem (§2.7). Needs a human to say
+   whether windows still appear; the `conhost` count was inconclusive.
+4. Build the decider's verification agent (§4.2). Largest remaining piece of
+   work, but nothing is blocked on it — escalation is a working fallback.
+5. Close the `PermissionBreach` classification gap (§4.2).
+6. File the three SSSF issues in §3, starting with the `data_dir` exclusion —
+   one line of blast radius and a 10x disk saving.
+7. Add `--item` to the CLI so a specific issue can be forced. This bit twice
+   already: once when a stray `factory-done` removed #4 from the queue, and
+   again now that the round cap holds it.
+
+### A note on working with a live run
+
+Two of this session's failures came from operating the factory rather than from
+the factory itself (§2.6, and the near-miss in §2.7). The discipline that works:
+
+```
+commit  ->  verify clean tree  ->  launch  ->  do not touch that checkout
+```
+
+A second checkout, or a different repository, is safe to work in meanwhile —
+this report was written during a live run, in this repo, for that reason.
