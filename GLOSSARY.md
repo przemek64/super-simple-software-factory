@@ -48,3 +48,61 @@ spend, and events as they arrive.
 A fixed picture of a workflow's phase chain, shown beside its launcher for
 reference. It describes the workflow, never the state of any particular run — a
 run's actual progress is only ever shown in the session view.
+
+## Orchestration
+
+The unattended layer above workflows: it decides which run to start next, watches
+for it to finish, and carries an item of work forward without a person driving
+each step. Runs and workflows exist with or without it.
+
+## Tick
+
+One pass of the orchestration layer: read the world, judge what finished, start
+at most what the limits allow, and stop. A tick is short-lived and holds no state
+of its own between passes.
+
+## Stage
+
+One position in the ordered sequence an item of work passes through, bound to the
+workflow that advances it. Stages are named and ordered; the sequence is data, not
+code.
+
+## Artifact
+
+The durable thing a stage leaves behind that proves it happened — a pull request,
+a published review, a ledger entry. An artifact outlives the run that made it, and
+is the evidence the orchestration layer trusts about progress.
+
+## Reap
+
+Judging finished work at the start of a tick: for each run in flight, decide
+whether its stage is now done, failed, or still going, and record it.
+
+## Round
+
+One review-then-fix pass over a single revision of the work. A later round judges
+a different revision, so findings from an earlier round say nothing about the
+current one.
+
+## Writer run
+
+A run that commits to the branch under review. Two writer runs on one branch
+contend for the same history, so they are never in flight together.
+
+## Reader run
+
+A run that inspects the work and publishes an opinion without committing to the
+branch. Reader runs do not contend with each other.
+
+## Decider
+
+The judgement layer that acts where a person otherwise would: it verifies what
+the reviews claim against the real code, accepts or dismisses their findings, and
+either concludes the work or asks for a human. It never generates the work it
+judges.
+
+## Blocked
+
+The state of an item the orchestration layer has stopped attempting, because a
+budget was spent without producing the artifact. Blocked is a request for a
+person; it is never cleared by another attempt.
