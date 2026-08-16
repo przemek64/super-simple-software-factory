@@ -502,10 +502,24 @@ side: an artifact that disagrees with a stale report.
 
 ### 7.7 Still open
 
-- **The retest baseline (§2.8) is still not built.** Deliberately not attempted
-  here: changing the test gate immediately before unattended runs risks failing
-  every run tonight, and the branch for #5 is cut from a freshly merged main, so
-  it starts green. It remains the right next piece of work.
+- **The retest baseline (§2.8) is still not built.** Not attempted here:
+  changing the test gate immediately before unattended runs risks failing every
+  run of the night. It remains the right next piece of work.
+
+  The reasoning for deferring it was initially wrong, and the correction is
+  worth keeping. `origin/main` at `3aa0200` is **red on its own**: 5 failed,
+  416 passed. Four are in `test_permissions_worktree.py` and the fifth is
+  `test_every_phase_a_entry_checks_base_before_bootstrap` — the same test §2.8
+  is about. A branch cut from main before #4 merges therefore starts red, its
+  retest is charged to the agent as a *work* failure, and the item is parked
+  `blocked` for something it never did.
+
+  It is survivable tonight only because PR #92 already contains `origin/main`
+  and is green at 435/0, so merging #4 makes main green before #5 is cut. That
+  is a sequencing accident, not a fix. Note `git merge-base --is-ancestor
+  b4e5ce0 <pr92>` reports false: the interpreter/env fixes were cherry-picked,
+  so the content is present under a different sha. Ancestry is the wrong probe
+  for "did this fix land".
 - **Four stale worktrees were NOT pruned.** The handoff called all four safe,
   but two (`pr92-302b6e3d`, `pr92-979ee6bb`) hold uncommitted agent work from
   the two failed runs. With 29 GB free there was no reason to delete unexamined
