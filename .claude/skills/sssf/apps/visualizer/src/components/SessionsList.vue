@@ -145,7 +145,7 @@ const ordered = computed(() =>
 }
 
 .view-switch button.on {
-  background: rgba(148, 163, 255, 0.16);
+  background: rgba(135, 144, 194, 0.16);
   color: var(--text);
 }
 

@@ -76,10 +76,10 @@ const headline = computed(() => props.failure.headline.replace(/^guard:\s*/, '')
   justify-content: center;
   gap: 3px;
   padding: 8px 10px;
-  border: 1px solid rgba(255, 111, 103, 0.4);
+  border: 1px solid rgba(217, 123, 115, 0.4);
   border-left-width: 3px;
   border-radius: 8px;
-  background: rgba(255, 111, 103, 0.08);
+  background: rgba(217, 123, 115, 0.08);
   font-size: 15px;
   line-height: 1.35;
 }
@@ -95,7 +95,7 @@ const headline = computed(() => props.failure.headline.replace(/^guard:\s*/, '')
   flex: none;
   padding: 1px 6px;
   border-radius: 5px;
-  background: rgba(255, 111, 103, 0.22);
+  background: rgba(217, 123, 115, 0.22);
   color: #ff8f88;
   font-family: var(--mono);
   font-size: 13px;

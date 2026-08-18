@@ -9,8 +9,8 @@
 import { Bot, SquareTerminal, UserRound } from 'lucide-vue-next'
 import type { AgentSession, Phase, PhaseKind } from './types'
 
-export const ENGINEER_COLOR = '#e8b64a'
-export const CODE_COLOR = '#5ad2dd'
+export const ENGINEER_COLOR = '#caa459'
+export const CODE_COLOR = '#62aab2'
 
 export const KIND_ICONS = { engineer: UserRound, code: SquareTerminal, agent: Bot }
 

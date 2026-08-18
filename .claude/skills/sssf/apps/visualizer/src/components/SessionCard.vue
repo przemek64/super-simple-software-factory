@@ -311,23 +311,23 @@ const hiddenRowCount = computed(() =>
 }
 
 .card-archive:hover {
-  background: rgba(255, 111, 103, 0.16);
-  color: #ff6f67;
+  background: rgba(217, 123, 115, 0.16);
+  color: #d97b73;
 }
 
 .card:hover {
-  border-color: rgba(148, 163, 255, 0.45);
-  box-shadow: 0 10px 34px rgba(148, 163, 255, 0.12);
+  border-color: rgba(135, 144, 194, 0.45);
+  box-shadow: 0 10px 34px rgba(135, 144, 194, 0.12);
   transform: translateY(-2px);
 }
 
 .card.running {
-  border-color: rgba(108, 182, 255, 0.6);
-  box-shadow: 0 0 22px rgba(108, 182, 255, 0.16);
+  border-color: rgba(127, 166, 212, 0.6);
+  box-shadow: 0 0 22px rgba(127, 166, 212, 0.16);
 }
 
 .card.fail {
-  border-color: rgba(255, 111, 103, 0.6);
+  border-color: rgba(217, 123, 115, 0.6);
 }
 
 /* Text rows must never absorb flex shrink — the fixed-height card squeezes

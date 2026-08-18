@@ -36,9 +36,9 @@ function toggleLayout() {
         <!-- Inline copy of public/logo.svg (the favicon) so the mark renders
              crisply with no fetch; keep the two in sync. -->
         <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-          <rect x="4" y="6" width="17" height="5" rx="2.5" fill="#e8b64a" />
-          <rect x="8" y="13.5" width="20" height="5" rx="2.5" fill="#c89bff" />
-          <rect x="4" y="21" width="13" height="5" rx="2.5" fill="#5ad2dd" />
+          <rect x="4" y="6" width="17" height="5" rx="2.5" fill="#caa459" />
+          <rect x="8" y="13.5" width="20" height="5" rx="2.5" fill="#ab8fce" />
+          <rect x="4" y="21" width="13" height="5" rx="2.5" fill="#62aab2" />
         </svg>
         <span class="brand">Super Simple Software Factory</span>
         <template v-if="repo">
@@ -123,9 +123,9 @@ function toggleLayout() {
   height: 1px;
   background: linear-gradient(
     90deg,
-    rgba(200, 155, 255, 0.45),
-    rgba(90, 210, 221, 0.35) 40%,
-    rgba(90, 210, 221, 0.06)
+    rgba(171, 143, 206, 0.45),
+    rgba(98, 170, 178, 0.35) 40%,
+    rgba(98, 170, 178, 0.06)
   );
 }
 
@@ -141,7 +141,7 @@ function toggleLayout() {
   width: 20px;
   height: 20px;
   flex: none;
-  filter: drop-shadow(0 0 8px rgba(200, 155, 255, 0.35));
+  filter: drop-shadow(0 0 8px rgba(171, 143, 206, 0.35));
 }
 
 .brand {
@@ -236,7 +236,7 @@ function toggleLayout() {
   height: 7px;
   border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 10px rgba(74, 222, 128, 0.7);
+  box-shadow: 0 0 10px rgba(108, 186, 143, 0.7);
   animation: pulse 1.6s ease-in-out infinite;
 }
 </style>

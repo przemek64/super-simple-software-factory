@@ -117,3 +117,10 @@ export function fetchEnvelopes(adwId: string): Promise<Envelope[]> {
 export function fetchGates(adwId: string): Promise<GateResult[]> {
   return getJson(`/api/sessions/${encodeURIComponent(adwId)}/gates`) as Promise<GateResult[]>
 }
+
+/** null when the item has no factory history (never touched adws_factory). */
+export async function fetchFactoryStatus(issue: number, pr: number | null): Promise<string | null> {
+  const q = pr !== null ? `issue=${issue}&pr=${pr}` : `issue=${issue}`
+  const data = (await getJson(`/api/factory-status?${q}`)) as { status: string | null }
+  return data.status ?? null
+}

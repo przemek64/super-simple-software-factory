@@ -5,12 +5,12 @@ import type { AgentStartPayload, EventRow, ToolCallPayload } from './types'
 // detail list. gate_fail reads as an error signal on purpose.
 
 export const EVENT_DOT_COLORS: Record<string, string> = {
-  agent_start: '#c89bff',
-  tool_call: '#5ad2dd',
-  handoff: '#94a3ff',
-  agent_end: '#4ade80',
-  error: '#ff6f67',
-  gate_fail: '#ff6f67',
+  agent_start: '#ab8fce',
+  tool_call: '#62aab2',
+  handoff: '#8790c2',
+  agent_end: '#6cba8f',
+  error: '#d97b73',
+  gate_fail: '#d97b73',
 }
 
 export function dotColor(type: string | null): string | null {
@@ -23,7 +23,7 @@ export function dotColor(type: string | null): string | null {
 // for in-flight agents); the palette below covers dbs written before the
 // color column existed.
 
-export const AGENT_FALLBACK_COLORS = ['#c89bff', '#5ad2dd', '#94a3ff', '#e8b64a', '#f2a2c4']
+export const AGENT_FALLBACK_COLORS = ['#ab8fce', '#62aab2', '#8790c2', '#caa459', '#f2a2c4']
 
 export function agentColor(
   configColor: string | null | undefined,
@@ -34,11 +34,11 @@ export function agentColor(
     configColor ??
     payloadColor ??
     AGENT_FALLBACK_COLORS[index % AGENT_FALLBACK_COLORS.length] ??
-    '#c89bff'
+    '#ab8fce'
   )
 }
 
-/** "#c89bff" + alpha → rgba() usable in inline styles. Invalid input → transparent. */
+/** "#ab8fce" + alpha → rgba() usable in inline styles. Invalid input → transparent. */
 export function hexAlpha(hex: string, alpha: number): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
   if (!m || !m[1]) return 'transparent'

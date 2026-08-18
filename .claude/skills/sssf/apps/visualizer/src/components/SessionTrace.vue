@@ -325,7 +325,7 @@ function blockStyle(p: Phase, lane: Lane): Record<string, string> | undefined {
     left: geom.left,
     width: geom.width,
     background: `linear-gradient(180deg, ${hexAlpha(lane.color, 0.2)}, ${hexAlpha(lane.color, 0.05)})`,
-    borderColor: p.status === 'fail' ? 'rgba(255, 111, 103, 0.8)' : hexAlpha(lane.color, 0.55),
+    borderColor: p.status === 'fail' ? 'rgba(217, 123, 115, 0.8)' : hexAlpha(lane.color, 0.55),
     '--lane-glow': hexAlpha(lane.color, 0.28),
   }
 }
@@ -931,7 +931,7 @@ function selectPhase(p: Phase) {
 }
 
 .block:hover {
-  box-shadow: 0 0 18px var(--lane-glow, rgba(108, 182, 255, 0.2));
+  box-shadow: 0 0 18px var(--lane-glow, rgba(127, 166, 212, 0.2));
 }
 
 .b-top {
@@ -997,7 +997,7 @@ function selectPhase(p: Phase) {
 .block.selected {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
-  box-shadow: 0 0 22px var(--lane-glow, rgba(108, 182, 255, 0.25));
+  box-shadow: 0 0 22px var(--lane-glow, rgba(127, 166, 212, 0.25));
 }
 
 .tool-tick {

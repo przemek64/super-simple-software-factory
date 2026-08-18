@@ -20,7 +20,7 @@
  */
 import { computed, onMounted, onUnmounted, shallowRef, watch } from 'vue'
 import type { EventRow, SessionSummary } from '../lib/types'
-import { archiveSession, fetchEvents } from '../lib/api'
+import { archiveSession, fetchEvents, fetchFactoryStatus } from '../lib/api'
 import { axisTicks, fmtDate, fmtOffset, ts } from '../lib/format'
 import { agentColor, eventLabel, parsePayload } from '../lib/events'
 import { hrefFor } from '../lib/router'
@@ -135,6 +135,48 @@ const refs = computed(() => {
 
 const hasRefs = computed(() => refs.value.pr !== null || refs.value.issue !== null)
 
+// ── factory status ───────────────────────────────────────────────────────────
+// Separate from the run's own status: this is what adws_factory thinks of the
+// ISSUE (running/held/escalated/merged/parked), not this session. It only
+// exists once an issue number is known, and it changes slowly, so it is
+// fetched once (and again every few seconds while the run is live) rather
+// than on the 500ms event-poll cadence.
+const factoryStatus = shallowRef<string | null>(null)
+let factoryTimer: ReturnType<typeof setInterval> | undefined
+
+async function pullFactoryStatus() {
+  const issue = refs.value.issue
+  if (issue === null) return
+  try {
+    factoryStatus.value = await fetchFactoryStatus(Number(issue), refs.value.pr ? Number(refs.value.pr) : null)
+  } catch {
+    /* stays at its last known value; not worth surfacing as a row error */
+  }
+}
+
+watch(
+  () => refs.value.issue,
+  (issue) => {
+    if (issue === null) return
+    void pullFactoryStatus()
+    if (running.value && !factoryTimer) {
+      factoryTimer = setInterval(() => void pullFactoryStatus(), 5000)
+    }
+  },
+  { immediate: true },
+)
+
+watch(running, (isRunning) => {
+  if (!isRunning && factoryTimer) {
+    clearInterval(factoryTimer)
+    factoryTimer = undefined
+  }
+})
+
+onUnmounted(() => {
+  if (factoryTimer) clearInterval(factoryTimer)
+})
+
 const range = computed(() => {
   const s = props.session
   let t0 = ts(s.started_at)
@@ -191,7 +233,7 @@ const EVENT_SHAPE: Record<string, 'start' | 'call' | 'handoff' | 'end' | 'error'
   gate_fail: 'error',
 }
 
-const ERROR_COLOR = '#ff6f67'
+const ERROR_COLOR = '#d97b73'
 
 interface Mark {
   id: string
@@ -255,6 +297,13 @@ const durationMs = computed(() => {
         <template v-if="hasRefs">
           <span v-if="refs.pr" class="ref pr">PR #{{ refs.pr }}</span>
           <span v-if="refs.issue" class="ref issue">#{{ refs.issue }}</span>
+          <span
+            v-if="factoryStatus"
+            class="ref factory-status"
+            :class="factoryStatus"
+            title="Factory item status — from adws_factory, not this run"
+            >{{ factoryStatus }}</span
+          >
         </template>
         <span v-else class="faint">no ref</span>
       </span>
@@ -324,25 +373,25 @@ const durationMs = computed(() => {
 }
 
 .row:hover {
-  border-color: rgba(148, 163, 255, 0.45);
-  background: rgba(148, 163, 255, 0.05);
+  border-color: rgba(135, 144, 194, 0.45);
+  background: rgba(135, 144, 194, 0.05);
 }
 
 /* The frame IS the verdict — this is what replaced the status chip. Left
    border thickened so the color reads down a long list without the whole row
    glowing. */
 .row.running {
-  border-color: rgba(108, 182, 255, 0.6);
+  border-color: rgba(127, 166, 212, 0.6);
   border-left: 3px solid var(--blue);
 }
 
 .row.success {
-  border-color: rgba(74, 222, 128, 0.45);
+  border-color: rgba(108, 186, 143, 0.45);
   border-left: 3px solid var(--green);
 }
 
 .row.fail {
-  border-color: rgba(255, 111, 103, 0.6);
+  border-color: rgba(217, 123, 115, 0.6);
   border-left: 3px solid var(--red);
 }
 
@@ -396,11 +445,41 @@ const durationMs = computed(() => {
 
 .ref.pr {
   color: var(--green);
-  border-color: rgba(74, 222, 128, 0.35);
+  border-color: rgba(108, 186, 143, 0.35);
 }
 
 .ref.issue {
   color: var(--dim);
+}
+
+.ref.factory-status {
+  text-transform: capitalize;
+  font-size: 13px;
+}
+
+.ref.factory-status.running {
+  color: var(--blue);
+  border-color: rgba(127, 166, 212, 0.35);
+}
+
+.ref.factory-status.held {
+  color: var(--yellow, #eab308);
+  border-color: rgba(234, 179, 8, 0.35);
+}
+
+.ref.factory-status.escalated {
+  color: var(--red);
+  border-color: rgba(217, 123, 115, 0.35);
+}
+
+.ref.factory-status.merged {
+  color: var(--green);
+  border-color: rgba(108, 186, 143, 0.35);
+}
+
+.ref.factory-status.parked {
+  color: var(--dim);
+  border-color: var(--border-soft);
 }
 
 /* Leads the row: when the run happened is the first thing you scan for. */
@@ -439,8 +518,8 @@ const durationMs = computed(() => {
 }
 
 .r-archive:hover {
-  background: rgba(255, 111, 103, 0.16);
-  color: #ff6f67;
+  background: rgba(217, 123, 115, 0.16);
+  color: #d97b73;
 }
 
 /* ── line 2 ─────────────────────────────────────────────────────────────── */

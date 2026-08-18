@@ -1027,7 +1027,7 @@ h3:first-child {
 }
 
 .tag-fail {
-  border-color: rgba(255, 111, 103, 0.55);
+  border-color: rgba(217, 123, 115, 0.55);
 }
 
 .tag-fail .tag-v {

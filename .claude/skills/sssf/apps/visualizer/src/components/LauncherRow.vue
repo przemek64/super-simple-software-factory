@@ -175,7 +175,7 @@ input:focus {
   padding: 8px 16px;
   border: 1px solid var(--cyan);
   border-radius: 7px;
-  background: rgba(90, 210, 221, 0.12);
+  background: rgba(98, 170, 178, 0.12);
   color: var(--text);
   font-family: var(--sans);
   font-size: 13px;
@@ -184,7 +184,7 @@ input:focus {
 }
 
 .run:hover:not(:disabled) {
-  background: rgba(90, 210, 221, 0.22);
+  background: rgba(98, 170, 178, 0.22);
 }
 
 .run:disabled {

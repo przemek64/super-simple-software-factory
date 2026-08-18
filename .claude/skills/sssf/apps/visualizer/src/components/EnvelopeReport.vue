@@ -227,12 +227,12 @@ const files = computed(() => payload.value.changed_files ?? payload.value.docume
 
 .verdict.ok {
   color: var(--green);
-  background: rgba(74, 222, 128, 0.1);
+  background: rgba(108, 186, 143, 0.1);
 }
 
 .verdict.bad {
   color: var(--red);
-  background: rgba(255, 111, 103, 0.1);
+  background: rgba(217, 123, 115, 0.1);
 }
 
 .axis {
@@ -328,12 +328,12 @@ li {
 .sev.critical,
 .sev.high {
   color: var(--red);
-  background: rgba(255, 111, 103, 0.14);
+  background: rgba(217, 123, 115, 0.14);
 }
 
 .sev.medium {
   color: var(--amber);
-  background: rgba(232, 182, 74, 0.14);
+  background: rgba(202, 164, 89, 0.14);
 }
 
 .sev.low {

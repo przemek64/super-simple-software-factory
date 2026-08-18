@@ -105,7 +105,7 @@ const stillborn = computed(() => launches.value.filter((l) => l.state === 'faile
   padding: 12px 16px;
   border: 1px solid var(--red);
   border-radius: 10px;
-  background: rgba(255, 111, 103, 0.07);
+  background: rgba(217, 123, 115, 0.07);
   font-size: 12px;
 }
 

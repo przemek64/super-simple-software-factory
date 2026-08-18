@@ -37,23 +37,23 @@ const ICONS: Record<string, unknown> = {
 
 .chip.success {
   color: var(--green);
-  border-color: rgba(74, 222, 128, 0.45);
-  background: rgba(74, 222, 128, 0.09);
-  box-shadow: 0 0 12px rgba(74, 222, 128, 0.12);
+  border-color: rgba(108, 186, 143, 0.45);
+  background: rgba(108, 186, 143, 0.09);
+  box-shadow: 0 0 12px rgba(108, 186, 143, 0.12);
 }
 
 .chip.fail {
   color: var(--red);
-  border-color: rgba(255, 111, 103, 0.45);
-  background: rgba(255, 111, 103, 0.09);
-  box-shadow: 0 0 12px rgba(255, 111, 103, 0.12);
+  border-color: rgba(217, 123, 115, 0.45);
+  background: rgba(217, 123, 115, 0.09);
+  box-shadow: 0 0 12px rgba(217, 123, 115, 0.12);
 }
 
 .chip.running {
   color: var(--blue);
-  border-color: rgba(108, 182, 255, 0.45);
-  background: rgba(108, 182, 255, 0.09);
-  box-shadow: 0 0 12px rgba(108, 182, 255, 0.18);
+  border-color: rgba(127, 166, 212, 0.45);
+  background: rgba(127, 166, 212, 0.09);
+  box-shadow: 0 0 12px rgba(127, 166, 212, 0.18);
 }
 
 .chip.running .chip-icon {

@@ -16,6 +16,7 @@ import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
 import { LauncherError, Launchers } from "./launcher.ts";
+import { factoryStatusFor } from "./factoryStatus.ts";
 import type {
   AgentPrompts,
   ApiError,
@@ -244,6 +245,24 @@ const server = Bun.serve({
         }
       }),
     },
+
+    // Factory item status (running/held/escalated/merged/parked), derived from
+    // adws_factory's state.json + GitHub — not a column in sssf.db, so it is
+    // its own endpoint rather than something sessions() computes.
+    "/api/factory-status": safely(async (req) => {
+      const issue = intQuery(req, "issue", NaN);
+      const pr = intQuery(req, "pr", NaN);
+      if (!Number.isFinite(issue)) {
+        return json({ error: "issue is required" } satisfies ApiError, 400);
+      }
+      const status = await factoryStatusFor(
+        launchers.repoRoot,
+        db.path,
+        issue,
+        Number.isFinite(pr) ? pr : null,
+      );
+      return json({ status });
+    }),
 
     "/api/sessions/:adw_id": safely((req) => {
       const detail = db.sessionDetail(param(req, "adw_id"));
