@@ -170,7 +170,7 @@ review artifact stale and pulls the item back a stage — so without a stopping 
 the pair cycles indefinitely, and a reviewer that always finds something will
 always find something.
 
-The rule: stop when a round produces nothing worth fixing, or after two rounds
+The rule: stop when a round produces nothing worth fixing, or after three rounds
 regardless, and hand the current revision to the decider with the round history.
 
 **"Nothing worth fixing" is not a signal anyone sends.** It is the absence of a
@@ -181,11 +181,16 @@ decider runs. Convergence is detected by the same artifact probes as everything
 else — there is no separate "clean round" flag to look for.
 
 **A round is counted on the last stage completing**, in `reap`, against the
-artifact rather than the run's status. Two rounds is therefore tight: the first
-covers the initial review and the first fix, the second covers verifying that fix.
-An item whose verification pass finds a regression has no round left to repair it
-and escalates one pass short. If the escalation rate is dominated by that pattern,
-the cap is the thing to raise, not the reviewer to soften.
+artifact rather than the run's status. The cap was two and is now three, because
+two is exactly the minimum and leaves no slack: the first round covers the initial
+review and its fix, the second covers verifying that fix, and an item whose
+verification pass finds a regression has none left to repair it. It escalates one
+pass short of done — which is the expensive kind of wrong, since it wakes a person
+for work the factory could have finished. Three buys one repair-and-reverify.
+
+Raising it does not weaken convergence. A clean round still ends the cycle early,
+and that is the normal exit; the cap only bounds the pathological case where the
+reviewer finds something every time.
 
 ## First deployment
 
