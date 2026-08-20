@@ -87,12 +87,29 @@ current one.
 ## Writer run
 
 A run that commits to the branch under review. Two writer runs on one branch
-contend for the same history, so they are never in flight together.
+contend for the same history, so they are never in flight together. A writer run
+may still be started alongside a reader run on the same item — that pair is the
+intended shape, not an exception.
 
 ## Reader run
 
 A run that inspects the work and publishes an opinion without committing to the
 branch. Reader runs do not contend with each other.
+
+## Ledger
+
+The record of which external reviews have already been consumed by the fix stage,
+kept as a JSON file keyed by review id. It is a list of things already handled, not
+an account of anything. Keyed by review rather than by pull request, so a second
+review on the same pull request reads as unconsumed work.
+
+## Full review request
+
+A comment addressed to the external reviewer asking it to re-examine an entire pull
+request at a named revision. Needed because the reviewer is incremental by default:
+it will not revisit findings it raised earlier, and after a push it may decline to
+review at all. Asking is a move, not a stall — an item that has just asked is
+waiting for an answer and must not be parked.
 
 ## Decider
 
