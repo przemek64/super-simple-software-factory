@@ -213,14 +213,32 @@ reading a tick log:
 |---|---|---|
 | p1 | is there an open pull request? | — |
 | p2 | is there an in-house review **pinned to the head**? | not done → p2 launches |
-| p3 | is the newest external review **pinned to the head** already recorded as handled? | **done → p3 is skipped**, not blocked |
+| p3 | is the newest external review **pinned to the head** already recorded as handled? | depends on whether one was **asked for** — see below |
 
-p3 reporting done can therefore mean either "the review was consumed" or "there is
-no review for this head at all". Treating the second as *not done* would hang
-forever, since the external reviewer may never volunteer one — so the probe passes
-and the freshness question moves to the decider, which unlike a probe can act on it
-by requesting a review. A tick log line reading "all stages done → decider" does not
-imply the current head was externally reviewed.
+p3 reporting done can mean either "the review was consumed" or "there is no review
+for this head at all", and the difference matters:
+
+- **A full review of this head was requested and the grace window has not expired**
+  → **not done.** The work is coming, so the stage is launched to wait for it, in
+  parallel with the reviewer. This is what makes the pair real, and it was missing
+  from the first implementation: right after a fix pushes, nothing is pinned to the
+  new head yet, so p3 read as done and only p2 launched — the two stages stayed
+  serialised even though `select` could now propose both. Observed on PR #99.
+- **No request, or the grace has expired** → **done.** Nothing is coming. Treating
+  this as unfinished would hang forever, since the reviewer may never volunteer a
+  review, so the freshness question moves to the decider — which, unlike a probe,
+  can act on it by asking.
+
+The grace window (`external_review_grace_seconds`) **must track the fix workflow's
+own await timeout**. Larger, and a second fix run starts waiting after the first
+gave up, spinning until the launch ceiling at 15 minutes a turn. Equal, and at most
+one run waits a dead request out before the stage reads done and the decider takes
+the question — which is the right owner for it, because the reviewer's other failure
+mode is answering *without* pinning to the head, and no probe of pinned reviews can
+ever see that.
+
+A tick log line reading "all stages done → decider" still does not imply the current
+head was externally reviewed.
 
 The ledger is a plain JSON file, `adws/adw_runtime/coderabbit_processed.json`, keyed
 `<repo>#<pr>#<review_id>`. Nothing accounting is implied by the name; it is a list of

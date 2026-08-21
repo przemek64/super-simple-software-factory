@@ -36,7 +36,21 @@ would land in the same tick and the answer could never be acted on.
 - The request belongs at the moment the head moves, not at the moment the decider
   notices. Posted late, the reviewer's turnaround is serialised after the review
   stage instead of overlapping it, and the review stage can spend a full run judging
-  a head the reviewer has not seen.
+  a head the reviewer has not seen. Measured on PR #99: the request went out at
+  00:42:52 inside the same reap that saw the push, the reviewer answered at 00:49:40,
+  and the review stage ran 00:42:49 to 00:49:56 — the two overlapped almost exactly.
+- The request is also a **progress signal**, not only a message. A stage whose input
+  has been asked for is a stage with work coming, and the fix stage is launched to
+  wait for it rather than skipped. Without that reading the request buys the overlap
+  of the reviewer's turnaround but not the pairing itself: nothing is pinned to a
+  freshly pushed head, so the fix stage reads as finished and only the reviewer
+  starts.
+- Reading it that way needs a bound, because the reviewer's other failure mode is
+  answering without pinning to the head — a request that no pinned review will ever
+  satisfy. Past a grace window matching the fix workflow's own await timeout, the
+  stage reads done and the decider takes the question. It is the right owner: it asks
+  whether the reviewer has *spoken* since the head landed, which has an answer even
+  when nothing is pinned.
 
 ## Considered alternatives
 
