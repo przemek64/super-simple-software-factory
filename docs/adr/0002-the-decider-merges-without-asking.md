@@ -21,6 +21,15 @@ undoing its own work a second time.
   judgement — they hold, and the decider rules. A gate that enacted its own
   rewind once destroyed a pull request that had met most of its requirements and
   had no real defects, on five findings that were all false.
+- A finding the reviewer has itself marked repaired is not a finding. The decider
+  reads text, not code, so it cannot confirm a repair on its own — but when the
+  reviewer appends "Addressed in commit X" to its own objection and X is a commit
+  on this pull request, that retraction is the best evidence available and the
+  finding is dropped. Verified rather than trusted: a marker naming a commit the
+  pull request never carried is ignored, and a failure to read the commit list
+  counts every finding, because "cannot confirm" must never read as "confirmed
+  repaired". Measured on PR #99, where a retracted finding whose fix was present in
+  the file, and which the triager had also refused, still parked the item.
 - Escalation needs a channel that reaches a person who is not watching. A message
   to a phone is part of the design, not an add-on.
 - The decider spends metered model quota of its own, so it is subject to the same
