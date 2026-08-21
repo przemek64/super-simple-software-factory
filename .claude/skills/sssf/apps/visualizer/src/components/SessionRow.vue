@@ -142,6 +142,12 @@ const hasRefs = computed(() => refs.value.pr !== null || refs.value.issue !== nu
 // fetched once (and again every few seconds while the run is live) rather
 // than on the 500ms event-poll cadence.
 const factoryStatus = shallowRef<string | null>(null)
+// "running" is the common case and goes stale the instant the tick moves on —
+// the user already knows which run is running, so it is worth fetching (other
+// states still need it) but not worth displaying.
+const visibleFactoryStatus = computed(() =>
+  factoryStatus.value && factoryStatus.value !== 'running' ? factoryStatus.value : null,
+)
 let factoryTimer: ReturnType<typeof setInterval> | undefined
 
 async function pullFactoryStatus() {
@@ -298,11 +304,11 @@ const durationMs = computed(() => {
           <span v-if="refs.pr" class="ref pr">PR #{{ refs.pr }}</span>
           <span v-if="refs.issue" class="ref issue">#{{ refs.issue }}</span>
           <span
-            v-if="factoryStatus"
+            v-if="visibleFactoryStatus"
             class="ref factory-status"
-            :class="factoryStatus"
+            :class="visibleFactoryStatus"
             title="Factory item status — from adws_factory, not this run"
-            >{{ factoryStatus }}</span
+            >{{ visibleFactoryStatus }}</span
           >
         </template>
         <span v-else class="faint">no ref</span>
@@ -455,11 +461,6 @@ const durationMs = computed(() => {
 .ref.factory-status {
   text-transform: capitalize;
   font-size: 13px;
-}
-
-.ref.factory-status.running {
-  color: var(--blue);
-  border-color: rgba(127, 166, 212, 0.35);
 }
 
 .ref.factory-status.held {
