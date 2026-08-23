@@ -124,3 +124,23 @@ export async function fetchFactoryStatus(issue: number, pr: number | null): Prom
   const data = (await getJson(`/api/factory-status?${q}`)) as { status: string | null }
   return data.status ?? null
 }
+
+export interface LedgerPr {
+  number: number
+  title: string
+  state: string
+  isDraft: boolean
+  live: boolean
+}
+
+export interface LedgerIssue {
+  number: number
+  title: string
+  status: string | null
+  stage: string | null
+  prs: LedgerPr[]
+}
+
+export function fetchIssues(): Promise<LedgerIssue[]> {
+  return getJson('/api/issues') as Promise<LedgerIssue[]>
+}

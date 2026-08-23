@@ -16,7 +16,7 @@ import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
 import { LauncherError, Launchers } from "./launcher.ts";
-import { factoryStatusFor } from "./factoryStatus.ts";
+import { factoryStatusFor, listIssues } from "./factoryStatus.ts";
 import type {
   AgentPrompts,
   ApiError,
@@ -263,6 +263,11 @@ const server = Bun.serve({
       );
       return json({ status });
     }),
+
+    // The issues ledger: one row per issue, its factory status, stage, and
+    // linked PR(s) with live/superseded flagged. Same cached snapshot as
+    // /api/factory-status, so this costs no extra `gh` calls beyond the first.
+    "/api/issues": safely(async () => json(await listIssues(launchers.repoRoot, db.path))),
 
     "/api/sessions/:adw_id": safely((req) => {
       const detail = db.sessionDetail(param(req, "adw_id"));
