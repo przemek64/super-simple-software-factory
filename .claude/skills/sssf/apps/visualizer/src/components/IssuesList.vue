@@ -10,9 +10,16 @@
  * regenerate step.
  */
 import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
-import type { LedgerIssue } from '../lib/api'
+import type { LedgerIssue, ReviewCounts } from '../lib/api'
 import { fetchIssues } from '../lib/api'
 import { hrefFor } from '../lib/router'
+
+function reviewTitle(r: ReviewCounts): string {
+  return (
+    `${r.accepted} accepted, ${r.rejected} rejected — ` +
+    `critical ${r.critical}, high ${r.high}, medium ${r.medium}, low ${r.low}`
+  )
+}
 
 const issues = shallowRef<LedgerIssue[]>([])
 const apiError = ref<string | null>(null)
@@ -82,15 +89,27 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
              repeat labelled "p2/2", failed runs in red — so a stuck loop
              shows itself at a glance instead of hiding behind one status word. -->
         <div v-if="issue.stages.length" class="i-stages">
-          <a
-            v-for="run in issue.stages"
-            :key="run.adw_id"
-            class="stage-chip"
-            :class="run.status"
-            :href="hrefFor(run.adw_id)"
-            :title="`${run.label} — ${run.status ?? 'unknown'} — ${run.adw_id}`"
-            >{{ run.label }}</a
-          >
+          <span v-for="run in issue.stages" :key="run.adw_id" class="stage-item">
+            <a
+              class="stage-chip"
+              :class="run.status"
+              :href="hrefFor(run.adw_id)"
+              :title="`${run.label} — ${run.status ?? 'unknown'} — ${run.adw_id}`"
+              >{{ run.label }}</a
+            >
+            <!-- p3 (CodeRabbit) only: what it found on this run, split by its
+                 own fix/reject call and by severity. CodeRabbit's severity is
+                 documented as unreliable (adw_modules/coderabbit.py) — this is
+                 a rough signal for triage, not a verdict. -->
+            <span v-if="run.review" class="review" :title="reviewTitle(run.review)">
+              <span class="rv accept">✓{{ run.review.accepted }}</span>
+              <span class="rv reject">✗{{ run.review.rejected }}</span>
+              <span v-if="run.review.critical" class="sev critical">{{ run.review.critical }}</span>
+              <span v-if="run.review.high" class="sev high">{{ run.review.high }}</span>
+              <span v-if="run.review.medium" class="sev medium">{{ run.review.medium }}</span>
+              <span v-if="run.review.low" class="sev low">{{ run.review.low }}</span>
+            </span>
+          </span>
         </div>
       </div>
     </div>
@@ -188,6 +207,57 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
   color: var(--red);
   border-color: rgba(217, 123, 115, 0.5);
   background: rgba(217, 123, 115, 0.08);
+}
+
+.stage-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.review {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.rv {
+  white-space: nowrap;
+}
+
+.rv.accept {
+  color: var(--green);
+}
+
+.rv.reject {
+  color: var(--faint);
+}
+
+/* The four severity tiers, in the exact weight/color spread asked for: a
+   critical finding should be unmissable next to a low one. */
+.sev {
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.sev.critical {
+  color: #b0453d;
+  font-weight: 700;
+  background: rgba(176, 69, 61, 0.14);
+}
+
+.sev.high {
+  color: var(--red);
+}
+
+.sev.medium {
+  color: var(--amber);
+}
+
+.sev.low {
+  color: var(--green);
 }
 
 .i-prs {

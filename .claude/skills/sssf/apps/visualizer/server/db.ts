@@ -503,18 +503,24 @@ export class SssfDb {
       }
     }
 
+    // p2/p3 stages take a PR, not an issue (config.py Stage.arg == "pr"), so
+    // their runs never log an issue number at all — only the caller (which
+    // already builds a PR→issue map off "Fixes #N" for the ledger) can
+    // resolve those. Kept in the output with issue: null rather than dropped,
+    // so a p3 run is not silently missing from the stage trail.
     const ISSUE_TEXT_RE = /issue\s*#?(\d+)/i;
     const out: SessionRef[] = [];
     for (const s of sessions) {
       const refs = byAdw.get(s.adw_id) ?? { pr: null, issue: null };
-      const issue = refs.issue ?? ISSUE_TEXT_RE.exec(s.request ?? "")?.[1] ?? null;
-      if (issue === null) continue;
+      const issueText = refs.issue ?? ISSUE_TEXT_RE.exec(s.request ?? "")?.[1] ?? null;
+      const issue = issueText === null ? null : Number(issueText);
+      if (issue === null && refs.pr === null) continue;
       out.push({
         adw_id: s.adw_id,
         adw_name: s.adw_name,
         status: s.status,
         started_at: s.started_at,
-        issue: Number(issue),
+        issue,
         pr: refs.pr !== null ? Number(refs.pr) : null,
       });
     }

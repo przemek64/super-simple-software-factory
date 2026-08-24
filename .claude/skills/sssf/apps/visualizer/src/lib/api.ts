@@ -133,10 +133,20 @@ export interface LedgerPr {
   live: boolean
 }
 
+export interface ReviewCounts {
+  accepted: number
+  rejected: number
+  critical: number
+  high: number
+  medium: number
+  low: number
+}
+
 export interface LedgerStageRun {
   label: string
   status: string | null
   adw_id: string
+  review: ReviewCounts | null
 }
 
 export interface LedgerIssue {

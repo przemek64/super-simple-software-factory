@@ -18,6 +18,7 @@
  */
 import { dirname, join } from "node:path";
 import type { SssfDb } from "./db.ts";
+import { reviewCountsFor, type ReviewCounts } from "./coderabbitReview.ts";
 
 export type FactoryStatus = "running" | "held" | "escalated" | "merged" | "parked";
 
@@ -199,6 +200,9 @@ export interface StageRun {
   label: string;
   status: "running" | "success" | "fail" | null;
   adw_id: string;
+  /** p3 (CodeRabbit) runs only — null everywhere else, including a p3 run
+   *  that produced no triage file yet (still running, or predates the file). */
+  review: ReviewCounts | null;
 }
 
 export interface LedgerIssue {
@@ -213,11 +217,43 @@ export interface LedgerIssue {
 export async function listIssues(repoRoot: string, db: SssfDb): Promise<LedgerIssue[]> {
   const snap = await snapshotFor(repoRoot, db.path);
 
+  const prsByIssue = new Map<number, PrInfo[]>();
+  const issueByPr = new Map<number, number>();
+  for (const pr of snap.prs.values()) {
+    CLOSES_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = CLOSES_RE.exec(pr.body))) {
+      const issueNum = Number(match[1]);
+      const list = prsByIssue.get(issueNum) ?? [];
+      list.push(pr);
+      prsByIssue.set(issueNum, list);
+      issueByPr.set(pr.number, issueNum);
+    }
+  }
+
+  // p2/p3 runs only know their PR (config.py Stage.arg == "pr"); resolve
+  // their issue the same way a PR itself is linked to one, via its own
+  // "Fixes #N". A run that resolves to no issue at all (an orphan PR, or a
+  // pre-link-syntax PR) is dropped rather than shown with no home.
+  const refs = db
+    .sessionRefs()
+    .map((r) => ({ ...r, issue: r.issue ?? (r.pr !== null ? (issueByPr.get(r.pr) ?? null) : null) }))
+    .filter((r): r is typeof r & { issue: number } => r.issue !== null)
+    .toSorted((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? ""));
+
+  // Batched, not per-row: every p3 run's two small markdown files, read once
+  // and joined below rather than fetched again each time a chip renders.
+  const p3AdwIds = refs.filter((r) => stageNameFor(r.adw_name) === "p3").map((r) => r.adw_id);
+  const reviewsByAdw = new Map<string, ReviewCounts | null>();
+  await Promise.all(
+    p3AdwIds.map(async (adwId) => {
+      reviewsByAdw.set(adwId, await reviewCountsFor(db.sessionsDir, adwId));
+    }),
+  );
+
   const runsByIssue = new Map<number, StageRun[]>();
   const occurrence = new Map<string, number>(); // "issue|stage" -> count so far
-  for (const ref of db
-    .sessionRefs()
-    .toSorted((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? ""))) {
+  for (const ref of refs) {
     const stage = stageNameFor(ref.adw_name);
     const key = `${ref.issue}|${stage}`;
     const n = (occurrence.get(key) ?? 0) + 1;
@@ -227,20 +263,9 @@ export async function listIssues(repoRoot: string, db: SssfDb): Promise<LedgerIs
       label: n > 1 ? `${stage}/${n}` : stage,
       status: (ref.status as StageRun["status"]) ?? null,
       adw_id: ref.adw_id,
+      review: stage === "p3" ? (reviewsByAdw.get(ref.adw_id) ?? null) : null,
     });
     runsByIssue.set(ref.issue, list);
-  }
-
-  const prsByIssue = new Map<number, PrInfo[]>();
-  for (const pr of snap.prs.values()) {
-    CLOSES_RE.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = CLOSES_RE.exec(pr.body))) {
-      const issueNum = Number(match[1]);
-      const list = prsByIssue.get(issueNum) ?? [];
-      list.push(pr);
-      prsByIssue.set(issueNum, list);
-    }
   }
 
   const out: LedgerIssue[] = [];
