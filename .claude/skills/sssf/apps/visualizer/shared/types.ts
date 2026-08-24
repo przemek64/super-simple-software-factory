@@ -350,6 +350,17 @@ export type EnvelopesResponse = Envelope[];
 /** GET /api/sessions/:adw_id/gates */
 export type GatesResponse = GateResult[];
 
+/** One session's recovered issue/pr link — feeds the issues ledger's stage
+ *  trail. Not a db column; see SssfDb.sessionRefs(). */
+export interface SessionRef {
+  adw_id: string;
+  adw_name: string | null;
+  status: string | null;
+  started_at: string | null;
+  issue: number;
+  pr: number | null;
+}
+
 /** GET /api/health */
 export interface HealthResponse {
   ok: boolean;

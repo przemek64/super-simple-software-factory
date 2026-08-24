@@ -267,7 +267,7 @@ const server = Bun.serve({
     // The issues ledger: one row per issue, its factory status, stage, and
     // linked PR(s) with live/superseded flagged. Same cached snapshot as
     // /api/factory-status, so this costs no extra `gh` calls beyond the first.
-    "/api/issues": safely(async () => json(await listIssues(launchers.repoRoot, db.path))),
+    "/api/issues": safely(async () => json(await listIssues(launchers.repoRoot, db))),
 
     "/api/sessions/:adw_id": safely((req) => {
       const detail = db.sessionDetail(param(req, "adw_id"));

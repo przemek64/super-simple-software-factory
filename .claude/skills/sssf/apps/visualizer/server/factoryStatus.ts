@@ -17,6 +17,7 @@
  * share the same two `gh` calls instead of doubling them.
  */
 import { dirname, join } from "node:path";
+import type { SssfDb } from "./db.ts";
 
 export type FactoryStatus = "running" | "held" | "escalated" | "merged" | "parked";
 
@@ -178,16 +179,57 @@ export interface LedgerPr {
   live: boolean;
 }
 
+// adws_factory's default stage → workflow mapping (config.py DEFAULT_STAGES).
+// A project's own factory.yaml can rename or reorder these; unmatched
+// workflows still show, just under their own script name rather than "p1"/
+// "p2"/"p3" — degraded, not dropped.
+const STAGE_WORKFLOWS: Array<{ stage: string; match: string }> = [
+  { stage: "p1", match: "adw_simple_sdlc" },
+  { stage: "p2", match: "adw_pr_review_2axis_m3" },
+  { stage: "p3", match: "adw_coderabbit" },
+];
+
+function stageNameFor(adwName: string | null): string {
+  const name = (adwName ?? "").toLowerCase();
+  return STAGE_WORKFLOWS.find((s) => name.includes(s.match))?.stage ?? (adwName?.trim() || "run");
+}
+
+export interface StageRun {
+  /** "p2" the first time, "p2/2" the second, etc. */
+  label: string;
+  status: "running" | "success" | "fail" | null;
+  adw_id: string;
+}
+
 export interface LedgerIssue {
   number: number;
   title: string;
   status: FactoryStatus | null;
   stage: string | null;
   prs: LedgerPr[];
+  stages: StageRun[];
 }
 
-export async function listIssues(repoRoot: string, dbPath: string): Promise<LedgerIssue[]> {
-  const snap = await snapshotFor(repoRoot, dbPath);
+export async function listIssues(repoRoot: string, db: SssfDb): Promise<LedgerIssue[]> {
+  const snap = await snapshotFor(repoRoot, db.path);
+
+  const runsByIssue = new Map<number, StageRun[]>();
+  const occurrence = new Map<string, number>(); // "issue|stage" -> count so far
+  for (const ref of db
+    .sessionRefs()
+    .toSorted((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? ""))) {
+    const stage = stageNameFor(ref.adw_name);
+    const key = `${ref.issue}|${stage}`;
+    const n = (occurrence.get(key) ?? 0) + 1;
+    occurrence.set(key, n);
+    const list = runsByIssue.get(ref.issue) ?? [];
+    list.push({
+      label: n > 1 ? `${stage}/${n}` : stage,
+      status: (ref.status as StageRun["status"]) ?? null,
+      adw_id: ref.adw_id,
+    });
+    runsByIssue.set(ref.issue, list);
+  }
 
   const prsByIssue = new Map<number, PrInfo[]>();
   for (const pr of snap.prs.values()) {
@@ -204,14 +246,17 @@ export async function listIssues(repoRoot: string, dbPath: string): Promise<Ledg
   const out: LedgerIssue[] = [];
   for (const issue of snap.issues.values()) {
     const linkedPrs = prsByIssue.get(issue.number) ?? [];
+    const stages = runsByIssue.get(issue.number) ?? [];
     const hasBudget = Boolean(snap.budgets[String(issue.number)]);
     // Old, untouched history clutters a "what's in flight" view without
     // adding anything the closed issue itself doesn't already say.
-    if (issue.state !== "OPEN" && !hasBudget && linkedPrs.length === 0) continue;
+    if (issue.state !== "OPEN" && !hasBudget && linkedPrs.length === 0 && stages.length === 0) {
+      continue;
+    }
 
     // Live = newest OPEN PR; failing that, newest MERGED; failing that,
     // newest overall. Everything else on the issue is superseded.
-    const byNewest = [...linkedPrs].sort((a, b) => b.number - a.number);
+    const byNewest = linkedPrs.toSorted((a, b) => b.number - a.number);
     const live =
       byNewest.find((p) => p.state === "OPEN") ??
       byNewest.find((p) => p.state === "MERGED") ??
@@ -224,6 +269,7 @@ export async function listIssues(repoRoot: string, dbPath: string): Promise<Ledg
       title: issue.title,
       status: statusOf(snap, issue.number, live?.number ?? null),
       stage: stageLabel ? stageLabel.slice("stage: ".length) : null,
+      stages,
       prs: byNewest.map((p) => ({
         number: p.number,
         title: p.title,

@@ -12,6 +12,7 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
 import type { LedgerIssue } from '../lib/api'
 import { fetchIssues } from '../lib/api'
+import { hrefFor } from '../lib/router'
 
 const issues = shallowRef<LedgerIssue[]>([])
 const apiError = ref<string | null>(null)
@@ -56,26 +57,41 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
 
     <div v-if="ordered.length" class="rows">
       <div v-for="issue in ordered" :key="issue.number" class="row">
-        <span class="i-num">#{{ issue.number }}</span>
-        <span class="i-title" :title="issue.title">{{ issue.title }}</span>
-        <span v-if="issue.stage" class="i-stage">{{ issue.stage }}</span>
-        <span
-          v-if="issue.status"
-          class="ref factory-status"
-          :class="issue.status"
-          >{{ issue.status }}</span
-        >
-        <span class="i-prs">
+        <div class="row-meta">
+          <span class="i-num">#{{ issue.number }}</span>
+          <span class="i-title" :title="issue.title">{{ issue.title }}</span>
           <span
-            v-for="pr in issue.prs"
-            :key="pr.number"
-            class="ref pr"
-            :class="{ superseded: !pr.live, draft: pr.isDraft }"
-            :title="`${pr.title} — ${pr.state}${pr.isDraft ? ' (draft)' : ''}${pr.live ? '' : ' — superseded'}`"
-            >PR #{{ pr.number }}</span
+            v-if="issue.status"
+            class="ref factory-status"
+            :class="issue.status"
+            >{{ issue.status }}</span
           >
-          <span v-if="!issue.prs.length" class="faint">no PR yet</span>
-        </span>
+          <span class="i-prs">
+            <span
+              v-for="pr in issue.prs"
+              :key="pr.number"
+              class="ref pr"
+              :class="{ superseded: !pr.live, draft: pr.isDraft }"
+              :title="`${pr.title} — ${pr.state}${pr.isDraft ? ' (draft)' : ''}${pr.live ? '' : ' — superseded'}`"
+              >PR #{{ pr.number }}</span
+            >
+            <span v-if="!issue.prs.length" class="faint">no PR yet</span>
+          </span>
+        </div>
+        <!-- The stage trail: every run this issue went through, in order, a
+             repeat labelled "p2/2", failed runs in red — so a stuck loop
+             shows itself at a glance instead of hiding behind one status word. -->
+        <div v-if="issue.stages.length" class="i-stages">
+          <a
+            v-for="run in issue.stages"
+            :key="run.adw_id"
+            class="stage-chip"
+            :class="run.status"
+            :href="hrefFor(run.adw_id)"
+            :title="`${run.label} — ${run.status ?? 'unknown'} — ${run.adw_id}`"
+            >{{ run.label }}</a
+          >
+        </div>
       </div>
     </div>
     <div v-else-if="loaded" class="empty-state">no open or in-flight issues</div>
@@ -103,14 +119,21 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
 
 .row {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  flex-direction: column;
+  gap: 6px;
   min-width: 0;
   padding: 10px 18px;
   border: 1px solid var(--border-soft);
   border-radius: 12px;
   background: var(--surface);
   font-size: 16px;
+}
+
+.row-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
 
 .i-num {
@@ -128,14 +151,43 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
   white-space: nowrap;
 }
 
-.i-stage {
-  flex: none;
+.i-stages {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 2px;
+}
+
+.stage-chip {
   padding: 1px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-soft);
-  color: var(--cyan);
+  color: var(--dim);
   font-family: var(--mono);
   font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.stage-chip:hover {
+  border-color: var(--dim);
+}
+
+.stage-chip.success {
+  color: var(--green);
+  border-color: rgba(108, 186, 143, 0.35);
+}
+
+.stage-chip.running {
+  color: var(--blue);
+  border-color: rgba(127, 166, 212, 0.35);
+}
+
+.stage-chip.fail {
+  color: var(--red);
+  border-color: rgba(217, 123, 115, 0.5);
+  background: rgba(217, 123, 115, 0.08);
 }
 
 .i-prs {

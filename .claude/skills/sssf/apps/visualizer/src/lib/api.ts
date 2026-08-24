@@ -133,12 +133,19 @@ export interface LedgerPr {
   live: boolean
 }
 
+export interface LedgerStageRun {
+  label: string
+  status: string | null
+  adw_id: string
+}
+
 export interface LedgerIssue {
   number: number
   title: string
   status: string | null
   stage: string | null
   prs: LedgerPr[]
+  stages: LedgerStageRun[]
 }
 
 export function fetchIssues(): Promise<LedgerIssue[]> {

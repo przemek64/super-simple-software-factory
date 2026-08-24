@@ -25,6 +25,7 @@ import type {
   Phase,
   Session,
   SessionDetail,
+  SessionRef,
   SessionSummary,
   SessionUsage,
 } from "../shared/types.ts";
@@ -439,6 +440,85 @@ export class SssfDb {
            FROM gate_results WHERE adw_id = ? ORDER BY id`,
       )
       .all(adwId);
+  }
+
+  /**
+   * The issue/pr each session belongs to, for the issues ledger's stage trail.
+   * Mirrors the extraction SessionRow.vue already does client-side (structured
+   * payload field first, "issue #N" in the request text as a fallback) so the
+   * ledger and a session row never disagree about which issue a run was for.
+   *
+   * Two queries total, not one per session: the events query is narrowed to
+   * rows that could plausibly hold a pr/issue field, then the first match per
+   * session wins — same "best source first" rule the client uses.
+   */
+  sessionRefs(): SessionRef[] {
+    const sessions = this.db
+      .query<
+        {
+          adw_id: string;
+          adw_name: string | null;
+          status: string | null;
+          started_at: string | null;
+          request: string | null;
+        },
+        []
+      >(
+        `SELECT adw_id, ${this.optionalColumn("sessions", "adw_name")}, status, started_at, request
+           FROM sessions`,
+      )
+      .all();
+    if (sessions.length === 0) return [];
+
+    const ids = sessions.map((s) => s.adw_id);
+    const placeholders = ids.map(() => "?").join(", ");
+    const events = this.db
+      .query<{ adw_id: string; payload_json: string | null }, string[]>(
+        `SELECT adw_id, payload_json FROM events
+          WHERE adw_id IN (${placeholders})
+            AND (payload_json LIKE '%pr%' OR payload_json LIKE '%issue%')
+          ORDER BY rowid`,
+      )
+      .all(...ids);
+
+    const NUM = /(\d+)/;
+    function digits(v: unknown): string | null {
+      if (typeof v === "number" && Number.isFinite(v)) return String(v);
+      if (typeof v !== "string") return null;
+      return NUM.exec(v)?.[1] ?? null;
+    }
+
+    const byAdw = new Map<string, { pr: string | null; issue: string | null }>();
+    for (const row of events) {
+      const cur = byAdw.get(row.adw_id) ?? { pr: null, issue: null };
+      if (cur.pr && cur.issue) continue;
+      if (!row.payload_json) continue;
+      try {
+        const p = JSON.parse(row.payload_json) as Record<string, unknown>;
+        cur.pr ??= digits(p.pr ?? p.pr_number);
+        cur.issue ??= digits(p.issue ?? p.issue_number);
+        byAdw.set(row.adw_id, cur);
+      } catch {
+        /* a payload written by an older tracer just contributes nothing */
+      }
+    }
+
+    const ISSUE_TEXT_RE = /issue\s*#?(\d+)/i;
+    const out: SessionRef[] = [];
+    for (const s of sessions) {
+      const refs = byAdw.get(s.adw_id) ?? { pr: null, issue: null };
+      const issue = refs.issue ?? ISSUE_TEXT_RE.exec(s.request ?? "")?.[1] ?? null;
+      if (issue === null) continue;
+      out.push({
+        adw_id: s.adw_id,
+        adw_name: s.adw_name,
+        status: s.status,
+        started_at: s.started_at,
+        issue: Number(issue),
+        pr: refs.pr !== null ? Number(refs.pr) : null,
+      });
+    }
+    return out;
   }
 
   sessionCount(): number {
