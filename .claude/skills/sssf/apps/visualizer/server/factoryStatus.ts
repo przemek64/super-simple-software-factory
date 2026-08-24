@@ -20,7 +20,19 @@ import { dirname, join } from "node:path";
 import type { SssfDb } from "./db.ts";
 import { reviewCountsFor, type ReviewCounts } from "./coderabbitReview.ts";
 
-export type FactoryStatus = "running" | "held" | "escalated" | "merged" | "parked";
+export type FactoryStatus =
+  | "running"
+  | "held"
+  | "stalled"
+  | "escalated"
+  | "merged"
+  | "parked";
+
+// How long an item may sit without its pull request moving before "held" stops
+// being a wait and starts being a hang. Matches adws_factory's own default
+// external_review_grace_seconds (900s) plus a tick's slack: past that the
+// factory has itself concluded the answer is not coming.
+const STALL_MS = 20 * 60 * 1000;
 
 interface IssueInfo {
   number: number;
@@ -35,10 +47,17 @@ interface PrInfo {
   state: string; // OPEN | CLOSED | MERGED
   isDraft: boolean;
   body: string;
+  // Last activity of any kind: a push, a review, a comment. The clock that
+  // separates "waiting" from "stuck" -- a held item whose PR nothing has
+  // touched for STALL_MS is not waiting for anything that is still coming.
+  updatedAt: string | null;
 }
 
 interface Snapshot {
   budgets: Record<string, { blocked_stage: string | null }>;
+  // Items with a live tracked run. Such an item is genuinely working, however
+  // old its pull request is, so it can never be stalled.
+  tracked: Set<number>;
   issues: Map<number, IssueInfo>;
   prs: Map<number, PrInfo>;
   fetchedAt: number;
@@ -68,15 +87,23 @@ async function fetchSnapshot(repoRoot: string, factoryStateFile: string): Promis
       repoRoot,
     ),
     ghJson(
-      ["pr", "list", "--state", "all", "--limit", "500", "--json", "number,title,state,isDraft,body"],
+      ["pr", "list", "--state", "all", "--limit", "500", "--json", "number,title,state,isDraft,body,updatedAt"],
       repoRoot,
     ),
   ]);
 
   let budgets: Snapshot["budgets"] = {};
+  const tracked = new Set<number>();
   if (stateText) {
     try {
-      budgets = (JSON.parse(stateText).budgets ?? {}) as Snapshot["budgets"];
+      const parsed = JSON.parse(stateText) as {
+        budgets?: Snapshot["budgets"];
+        tracked?: Array<{ item?: number }>;
+      };
+      budgets = parsed.budgets ?? {};
+      for (const run of parsed.tracked ?? []) {
+        if (typeof run.item === "number") tracked.add(run.item);
+      }
     } catch {
       /* corrupt state.json costs status accuracy, not the request */
     }
@@ -104,6 +131,7 @@ async function fetchSnapshot(repoRoot: string, factoryStateFile: string): Promis
     state: string;
     isDraft: boolean;
     body: string;
+    updatedAt?: string;
   }>) ?? []) {
     prs.set(entry.number, {
       number: entry.number,
@@ -111,10 +139,11 @@ async function fetchSnapshot(repoRoot: string, factoryStateFile: string): Promis
       state: entry.state,
       isDraft: entry.isDraft,
       body: entry.body ?? "",
+      updatedAt: entry.updatedAt ?? null,
     });
   }
 
-  return { budgets, issues, prs, fetchedAt: Date.now() };
+  return { budgets, tracked, issues, prs, fetchedAt: Date.now() };
 }
 
 function snapshotFor(repoRoot: string, dbPath: string): Promise<Snapshot> {
@@ -145,10 +174,27 @@ function statusOf(
   if (pr !== null) {
     const info = snap.prs.get(pr);
     if (info?.state === "MERGED") return "merged";
-    if (info?.isDraft) return "held";
+    if (info?.isDraft) return stalled(snap, issue, info) ? "stalled" : "held";
   }
 
-  return budget ? "running" : null;
+  if (!budget) return null;
+  // Everything below reads "running", which is what this used to return
+  // unconditionally. But an item with no tracked run is not executing
+  // anything: the tick decided, held, and moved on. Measured on labeltool
+  // #246, which showed "running" for six hours while the decider held it on
+  // a review that never arrived, repeating the same line into a log nobody
+  // reads. A hold nothing is advancing has to look different from work.
+  const info = pr !== null ? snap.prs.get(pr) : undefined;
+  if (snap.tracked.has(issue)) return "running";
+  return stalled(snap, issue, info) ? "stalled" : "running";
+}
+
+/** Has this item sat with nothing touching its pull request for too long? */
+function stalled(snap: Snapshot, issue: number, info: PrInfo | undefined): boolean {
+  if (snap.tracked.has(issue)) return false; // a live run is never stalled
+  const updated = info?.updatedAt ? Date.parse(info.updatedAt) : NaN;
+  if (!Number.isFinite(updated)) return false; // no clock, no claim
+  return Date.now() - updated > STALL_MS;
 }
 
 /** null when there is nothing to show — the item has no factory history yet. */

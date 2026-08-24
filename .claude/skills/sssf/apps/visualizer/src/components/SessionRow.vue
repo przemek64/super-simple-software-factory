@@ -144,7 +144,9 @@ const hasRefs = computed(() => refs.value.pr !== null || refs.value.issue !== nu
 const factoryStatus = shallowRef<string | null>(null)
 // "running" is the common case and goes stale the instant the tick moves on —
 // the user already knows which run is running, so it is worth fetching (other
-// states still need it) but not worth displaying.
+// states still need it) but not worth displaying. Every other state IS worth
+// showing, "stalled" most of all: it is the one the old five-state model could
+// not express, so a hung item was indistinguishable from a working one.
 const visibleFactoryStatus = computed(() =>
   factoryStatus.value && factoryStatus.value !== 'running' ? factoryStatus.value : null,
 )
@@ -307,7 +309,11 @@ const durationMs = computed(() => {
             v-if="visibleFactoryStatus"
             class="ref factory-status"
             :class="visibleFactoryStatus"
-            title="Factory item status — from adws_factory, not this run"
+            :title="
+              visibleFactoryStatus === 'stalled'
+                ? 'Held with nothing touching its pull request for over 20 minutes — waiting on something that is not coming'
+                : 'Factory item status — from adws_factory, not this run'
+            "
             >{{ visibleFactoryStatus }}</span
           >
         </template>
@@ -466,6 +472,13 @@ const durationMs = computed(() => {
 .ref.factory-status.held {
   color: var(--yellow, #eab308);
   border-color: rgba(234, 179, 8, 0.35);
+}
+
+/* Louder than held: held is a wait, stalled is a wait that has failed. */
+.ref.factory-status.stalled {
+  color: var(--orange, #e0823d);
+  border-color: rgba(224, 130, 61, 0.45);
+  font-weight: 600;
 }
 
 .ref.factory-status.escalated {
