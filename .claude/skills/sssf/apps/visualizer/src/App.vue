@@ -2,12 +2,13 @@
 import { onMounted, ref } from 'vue'
 import { Columns3, LayoutDashboard, ListTree, Rows3 } from 'lucide-vue-next'
 import { fetchHealth } from './lib/api'
-import { useRoute, hrefFor, dashboardHref, issuesHref, phaseCrumb } from './lib/router'
+import { useRoute, hrefFor, dashboardHref, issuesHref, activityHref, phaseCrumb } from './lib/router'
 import { layoutMode } from './lib/view'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
 import Dashboard from './components/Dashboard.vue'
 import IssuesList from './components/IssuesList.vue'
+import ActivityList from './components/ActivityList.vue'
 
 const route = useRoute()
 
@@ -50,6 +51,8 @@ function toggleLayout() {
         <a :href="hrefFor()" :class="{ current: route.section === 'sessions' }">sessions</a>
         <span class="sep">·</span>
         <a :href="issuesHref" :class="{ current: route.section === 'issues' }">issues</a>
+        <span class="sep">·</span>
+        <a :href="activityHref" :class="{ current: route.section === 'activity' }">activity</a>
         <template v-if="route.section === 'runs' && route.adwId">
           <span class="sep">›</span>
           <a :href="hrefFor(route.adwId)" :class="{ current: !route.phaseId }">{{
@@ -96,6 +99,7 @@ function toggleLayout() {
     <main>
       <Dashboard v-if="route.section === 'dashboard'" />
       <IssuesList v-else-if="route.section === 'issues'" />
+      <ActivityList v-else-if="route.section === 'activity'" />
       <SessionsList v-else-if="!route.adwId" />
       <SessionTrace v-else :key="route.adwId" :adw-id="route.adwId" :phase-id="route.phaseId" />
     </main>

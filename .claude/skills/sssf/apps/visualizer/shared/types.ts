@@ -446,3 +446,83 @@ export interface LaunchStatus extends LaunchRecord {
   /** Tail of the launch log, only when the run failed to start. */
   log_tail: string | null;
 }
+
+// ── factory activity ─────────────────────────────────────────────────────────
+
+/** Who took the action. The three are separate processes with separate logs. */
+export type ActivityActor = "orchestrator" | "supervisor" | "recovery";
+
+/**
+ * What kind of action it was.
+ *
+ * `decided` is the decider's ruling, lifted out of the orchestrator's `notes:`
+ * lines because it is the one a person looks for. `note` is everything else
+ * the orchestrator remarked on.
+ */
+export type ActivityKind =
+  | "launched"
+  | "skipped"
+  | "decided"
+  | "reaped"
+  | "error"
+  | "note"
+  | "diagnosis"
+  | "recovery";
+
+export interface ActivityEvent {
+  /** Newest occurrence. Equal to firstAt unless the row was collapsed. */
+  at: string | null;
+  /** Oldest occurrence of a collapsed row. */
+  firstAt: string | null;
+  /**
+   * How many identical consecutive occurrences this row stands for. The
+   * orchestrator repeats a `skipped:` line every tick for as long as the
+   * condition holds, so an uncollapsed feed is almost entirely repeats.
+   */
+  repeats: number;
+  actor: ActivityActor;
+  kind: ActivityKind;
+  /** Issue number, when the line names one. */
+  item: number | null;
+  /** Stage, e.g. "p1". Null on a line that names no stage. */
+  stage: string | null;
+  adwId: string | null;
+  pid: number | null;
+  /** The workflow the orchestrator called, e.g. "adws/adw_simple_sdlc.py". */
+  script: string | null;
+  /**
+   * Provider-qualified models the run actually used, resolved from its agent
+   * rows. Empty for an event with no run behind it, and for a run that died
+   * before writing an agent row.
+   */
+  models: string[];
+  summary: string;
+  detail: string | null;
+  /** Diagnosis log on disk, for a supervisor row. */
+  log: string | null;
+}
+
+/** The supervisor's latest poll. One overwritten file, so it is not history. */
+export interface ActivitySnapshot {
+  polledAt: string | null;
+  health: string | null;
+  driverAlive: boolean | null;
+  driverDetail: string | null;
+  tickLockAlive: boolean | null;
+  lastTickAt: string | null;
+  lastTickAgeSeconds: number | null;
+  openItems: number[];
+  activeItem: number | null;
+  recoveryPaused: boolean | null;
+  /** Signal names that fired this poll, and those still short of the threshold. */
+  fired: string[];
+  candidates: string[];
+  errors: string[];
+}
+
+export interface ActivityResponse {
+  snapshot: ActivitySnapshot | null;
+  events: ActivityEvent[];
+  /** Events before the limit was applied. */
+  total: number;
+}

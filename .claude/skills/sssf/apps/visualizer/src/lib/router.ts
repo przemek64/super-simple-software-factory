@@ -6,12 +6,13 @@ import { ref } from 'vue'
 //   #/runs/<adw_id>/<phase_id>      → phase panel open
 //   #/dashboard                     → launchers
 //   #/issues                       → the factory ledger (issue → PR → status)
+//   #/activity                     → what the factory itself did (ticks, supervisor, recovery)
 //
 // The run id used to be the first segment, which left no room for a second
 // screen without reserving a word inside the id namespace — a reserved word in
 // an id namespace is the kind of thing that breaks silently later, so runs got
 // a section of their own instead.
-export type Section = 'sessions' | 'runs' | 'dashboard' | 'issues'
+export type Section = 'sessions' | 'runs' | 'dashboard' | 'issues' | 'activity'
 
 export interface Route {
   section: Section
@@ -28,6 +29,7 @@ function parse(): Route {
 
   if (parts[0] === 'dashboard') return { section: 'dashboard', adwId: null, phaseId: null }
   if (parts[0] === 'issues') return { section: 'issues', adwId: null, phaseId: null }
+  if (parts[0] === 'activity') return { section: 'activity', adwId: null, phaseId: null }
   if (parts[0] === 'runs' && parts[1]) {
     return { section: 'runs', adwId: parts[1], phaseId: parts[2] ?? null }
   }
@@ -60,6 +62,7 @@ export function hrefFor(adwId?: string | null, phaseId?: string | null): string 
 
 export const dashboardHref = '#/dashboard'
 export const issuesHref = '#/issues'
+export const activityHref = '#/activity'
 
 export function navigate(adwId?: string | null, phaseId?: string | null): void {
   window.location.hash = hrefFor(adwId, phaseId)

@@ -165,3 +165,67 @@ export interface LedgerIssue {
 export function fetchIssues(): Promise<LedgerIssue[]> {
   return getJson('/api/issues') as Promise<LedgerIssue[]>
 }
+
+// ── factory activity ─────────────────────────────────────────────────────────
+// Mirrors shared/types.ts. The client keeps its own copies of the API shapes
+// (see LedgerIssue above) rather than importing across the server boundary.
+
+export type ActivityActor = 'orchestrator' | 'supervisor' | 'recovery'
+
+export type ActivityKind =
+  | 'launched'
+  | 'skipped'
+  | 'decided'
+  | 'reaped'
+  | 'error'
+  | 'note'
+  | 'diagnosis'
+  | 'recovery'
+
+export interface ActivityEvent {
+  at: string | null
+  firstAt: string | null
+  repeats: number
+  actor: ActivityActor
+  kind: ActivityKind
+  item: number | null
+  stage: string | null
+  adwId: string | null
+  pid: number | null
+  script: string | null
+  models: string[]
+  summary: string
+  detail: string | null
+  log: string | null
+}
+
+export interface ActivitySnapshot {
+  polledAt: string | null
+  health: string | null
+  driverAlive: boolean | null
+  driverDetail: string | null
+  tickLockAlive: boolean | null
+  lastTickAt: string | null
+  lastTickAgeSeconds: number | null
+  openItems: number[]
+  activeItem: number | null
+  recoveryPaused: boolean | null
+  fired: string[]
+  candidates: string[]
+  errors: string[]
+}
+
+export interface ActivityResponse {
+  snapshot: ActivitySnapshot | null
+  events: ActivityEvent[]
+  total: number
+}
+
+export async function fetchActivity(limit = 300): Promise<ActivityResponse> {
+  const page = (await getJson(`/api/activity?limit=${limit}`)) as ActivityResponse
+  return {
+    snapshot: page.snapshot ?? null,
+    events: page.events ?? [],
+    total: page.total ?? 0,
+  }
+}

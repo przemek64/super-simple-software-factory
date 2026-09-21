@@ -17,6 +17,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
 import { LauncherError, Launchers } from "./launcher.ts";
 import { factoryStatusFor, listIssues } from "./factoryStatus.ts";
+import { activityFor } from "./activity.ts";
 import type {
   AgentPrompts,
   ApiError,
@@ -268,6 +269,11 @@ const server = Bun.serve({
     // linked PR(s) with live/superseded flagged. Same cached snapshot as
     // /api/factory-status, so this costs no extra `gh` calls beyond the first.
     "/api/issues": safely(async () => json(await listIssues(launchers.repoRoot, db))),
+
+    // The factory's own activity: orchestrator ticks, supervisor diagnoses and
+    // recovery actions, merged into one timeline. Reads four files under
+    // adws/adw_runtime/factory and calls no `gh`, so it is cheap to poll.
+    "/api/activity": safely((req) => json(activityFor(db, intQuery(req, "limit", 300)))),
 
     "/api/sessions/:adw_id": safely((req) => {
       const detail = db.sessionDetail(param(req, "adw_id"));
