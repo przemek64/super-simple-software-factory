@@ -357,6 +357,9 @@ export interface SessionRef {
   adw_name: string | null;
   status: string | null;
   started_at: string | null;
+  /** Null while the run is still going — the ledger treats that as "now"
+   *  when it sums active time. */
+  ended_at: string | null;
   /** null for a run that only knows its PR (p2/p3 stages) — the caller
    *  resolves those via the PR's own issue link. */
   issue: number | null;

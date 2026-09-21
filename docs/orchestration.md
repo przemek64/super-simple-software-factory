@@ -52,7 +52,12 @@ loop watches and does nothing; the moment nothing is running it ticks. A fixed
 interval wastes the gap between a stage finishing and the next tick — on the
 predecessor project a single item lost hours that way. One scheduled entry
 restarts the loop after a reboot, and a tick lock keeps a manual run from
-colliding with the loop.
+colliding with the loop. The independent [supervisor](./supervisor.md) can now
+restart a dead driver, stop a conservatively confirmed silent live run, and
+invoke the existing reaper for dead tracked runs when those infrastructure
+capabilities are armed. It does not call the decider or reset budgets. Tick
+and driver lifetime locks use OS-backed guards; a live writer's lock is never
+stolen based on age. Maintenance pause blocks both recovery and live ticks.
 
 ## Limits
 

@@ -327,7 +327,7 @@ agents:
       - write
 
   - name: standards_axis_codex
-    model: openai-codex/gpt-5.4
+    model: openai-codex/gpt-5.5
     thinking: high
     color: "#34d399"
     purpose: The Standards axis on a different mind, with no single-call timeout.
@@ -344,7 +344,7 @@ agents:
       - write
 
   - name: spec_axis_codex
-    model: openai-codex/gpt-5.4
+    model: openai-codex/gpt-5.5
     thinking: high
     color: "#60a5fa"
     purpose: The Spec axis on a different mind, with no single-call timeout.

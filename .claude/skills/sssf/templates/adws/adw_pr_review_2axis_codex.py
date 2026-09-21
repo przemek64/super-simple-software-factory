@@ -2,7 +2,7 @@
 # /// script
 # dependencies = ["pydantic", "python-dotenv", "pyyaml", "rich"]
 # ///
-"""ADW Two-Axis PR Review (codex) — Standards and Spec on gpt-5.4.
+"""ADW Two-Axis PR Review (codex) — Standards and Spec on gpt-5.5.
 
 Usage:
     uv run adws/adw_pr_review_2axis_codex.py --pr 90
@@ -11,7 +11,7 @@ Usage:
 Identical flow to adw_pr_review_2axis_m3.py; only the two axis seats change.
 
 WHY BOTH VARIANTS EXIST: they are built to be run head to head on the same PR.
-gpt-5.4 is the stronger cross-mind and carries no single-call timeout, so it
+gpt-5.5 is the stronger cross-mind and carries no single-call timeout, so it
 handles a diff that would time M3 out — and it costs accordingly. M3 is the one
 to reach for by default; this is the one for the PR you cannot afford to get
 wrong, or for a second opinion when the M3 run says the diff is clean.

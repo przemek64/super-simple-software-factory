@@ -256,6 +256,23 @@ export interface LedgerIssue {
   title: string;
   status: FactoryStatus | null;
   stage: string | null;
+  /** Every label on the GitHub issue, verbatim — the ledger's own read, not
+   *  just the "stage: " one already singled out above. */
+  labels: string[];
+  /** False when a tick would refuse to launch p1 on this item right now:
+   *  missing "approved-for-dev", or held with "factory-hold". Not a full
+   *  re-derivation of adws_factory's gates (branch state, launch ceiling,
+   *  work-attempt budget) — just the two conditions visible from labels
+   *  alone, enough to tell a dead row from a live one at a glance. */
+  launchable: boolean;
+  /** started_at of this issue's earliest known run — when the factory first
+   *  picked it up. Null until a run exists. */
+  pickedAt: string | null;
+  /** Sum of every run's own duration (ended_at, or now for one still going,
+   *  minus its started_at) — wall time actually spent working the issue, not
+   *  the wall time since it was picked (which includes every gap waiting on
+   *  review, a hold, or a human). Null until a run exists. */
+  activeMs: number | null;
   prs: LedgerPr[];
   stages: StageRun[];
 }
@@ -299,6 +316,8 @@ export async function listIssues(repoRoot: string, db: SssfDb): Promise<LedgerIs
 
   const runsByIssue = new Map<number, StageRun[]>();
   const occurrence = new Map<string, number>(); // "issue|stage" -> count so far
+  const pickedAtByIssue = new Map<number, string>();
+  const activeMsByIssue = new Map<number, number>();
   for (const ref of refs) {
     const stage = stageNameFor(ref.adw_name);
     const key = `${ref.issue}|${stage}`;
@@ -312,6 +331,18 @@ export async function listIssues(repoRoot: string, db: SssfDb): Promise<LedgerIs
       review: stage === "p3" ? (reviewsByAdw.get(ref.adw_id) ?? null) : null,
     });
     runsByIssue.set(ref.issue, list);
+
+    // refs is sorted by started_at ascending, so the first started_at seen
+    // per issue is its earliest — the moment the factory first picked it up.
+    if (ref.started_at && !pickedAtByIssue.has(ref.issue)) {
+      pickedAtByIssue.set(ref.issue, ref.started_at);
+    }
+
+    const startMs = ref.started_at ? Date.parse(ref.started_at) : NaN;
+    const endMs = ref.ended_at ? Date.parse(ref.ended_at) : Date.now();
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+      activeMsByIssue.set(ref.issue, (activeMsByIssue.get(ref.issue) ?? 0) + (endMs - startMs));
+    }
   }
 
   const out: LedgerIssue[] = [];
@@ -340,6 +371,10 @@ export async function listIssues(repoRoot: string, db: SssfDb): Promise<LedgerIs
       title: issue.title,
       status: statusOf(snap, issue.number, live?.number ?? null),
       stage: stageLabel ? stageLabel.slice("stage: ".length) : null,
+      labels: [...issue.labels].toSorted(),
+      launchable: issue.labels.has("approved-for-dev") && !issue.labels.has("factory-hold"),
+      pickedAt: pickedAtByIssue.get(issue.number) ?? null,
+      activeMs: activeMsByIssue.get(issue.number) ?? null,
       stages,
       prs: byNewest.map((p) => ({
         number: p.number,

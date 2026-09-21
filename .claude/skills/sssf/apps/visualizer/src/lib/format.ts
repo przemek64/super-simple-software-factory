@@ -15,6 +15,21 @@ export function fmtDuration(ms: number): string {
   return `${h}h ${String(m % 60).padStart(2, '0')}m`
 }
 
+// Relative to now, coarsest unit only — "picked 3d ago" needs a glance
+// answer, not a precise offset (fmtDuration already covers that case).
+export function fmtAgo(iso: string | null | undefined): string {
+  const t = ts(iso)
+  if (!Number.isFinite(t)) return '—'
+  const s = Math.max(0, (Date.now() - t) / 1000)
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}
+
 export function fmtClock(iso: string | null | undefined): string {
   const t = ts(iso)
   if (!Number.isFinite(t)) return '—'

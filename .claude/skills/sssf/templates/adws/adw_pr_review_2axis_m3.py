@@ -19,7 +19,7 @@ this one asks two different questions the other never asks: is it written the wa
 this repo writes code, and is it the thing the issue asked for. Run both when a
 PR matters; they do not overlap.
 
-The codex variant (adw_pr_review_2axis_codex.py) puts gpt-5.4 on both axes — a
+The codex variant (adw_pr_review_2axis_codex.py) puts gpt-5.5 on both axes — a
 different mind, and no single-call timeout.
 """
 

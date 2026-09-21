@@ -13,6 +13,7 @@ import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
 import type { LedgerIssue, ReviewCounts } from '../lib/api'
 import { fetchIssues } from '../lib/api'
 import { hrefFor } from '../lib/router'
+import { fmtAgo, fmtDuration } from '../lib/format'
 
 function reviewTitle(r: ReviewCounts): string {
   return (
@@ -52,6 +53,12 @@ onMounted(() => {
 onUnmounted(() => clearInterval(timer))
 
 const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.number))
+
+function notLaunchableReason(issue: LedgerIssue): string {
+  if (issue.labels.includes('factory-hold')) return 'on hold — factory-hold label'
+  if (!issue.labels.includes('approved-for-dev')) return 'not approved for dev — missing approved-for-dev label'
+  return 'not launchable'
+}
 </script>
 
 <template>
@@ -63,7 +70,13 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
     </div>
 
     <div v-if="ordered.length" class="rows">
-      <div v-for="issue in ordered" :key="issue.number" class="row">
+      <div
+        v-for="issue in ordered"
+        :key="issue.number"
+        class="row"
+        :class="{ dead: !issue.launchable }"
+        :title="issue.launchable ? undefined : notLaunchableReason(issue)"
+      >
         <div class="row-meta">
           <span class="i-num">#{{ issue.number }}</span>
           <span class="i-title" :title="issue.title">{{ issue.title }}</span>
@@ -84,6 +97,32 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
             >
             <span v-if="!issue.prs.length" class="faint">no PR yet</span>
           </span>
+          <!-- picked = wall time since the factory first touched this issue;
+               worked = sum of every run's own duration, i.e. time a workflow
+               was actually spending on it. The two diverge whenever the item
+               sat held, waiting on review, or on a human — which is most of
+               the gap on anything but a fast merge. -->
+          <span v-if="issue.pickedAt" class="i-time" :title="`picked ${issue.pickedAt}`">
+            <span class="picked">{{ fmtAgo(issue.pickedAt) }}</span>
+            <span v-if="issue.activeMs != null" class="worked">{{ fmtDuration(issue.activeMs) }} worked</span>
+          </span>
+        </div>
+        <!-- Its own line, right under the status/PR/issue column — narrow and
+             small on purpose: labels are secondary context, not the thing a
+             scan of this list is looking for, and the row has no width left
+             to spare next to the title. -->
+        <div v-if="issue.labels.length" class="i-labels">
+          <span
+            v-for="l in issue.labels"
+            :key="l"
+            class="ref label"
+            :class="{
+              target: l.startsWith('target: '),
+              approved: l === 'approved-for-dev',
+              done: l === 'factory-done',
+            }"
+            >{{ l }}</span
+          >
         </div>
         <!-- The stage trail: every run this issue went through, in order, a
              repeat labelled "p2/2", failed runs in red — so a stuck loop
@@ -146,6 +185,18 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
   border-radius: 12px;
   background: var(--surface);
   font-size: 16px;
+}
+
+/* Not launchable right now — missing approved-for-dev, or held. De-emphasized
+   the same way a superseded PR is: still readable, but visually the row you
+   skip over while scanning for what a tick could actually pick up next. */
+.row.dead {
+  opacity: 0.5;
+  filter: grayscale(0.6);
+}
+
+.row.dead:hover {
+  opacity: 0.75;
 }
 
 .row-meta {
@@ -260,11 +311,39 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
   color: var(--green);
 }
 
+.i-labels {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
 .i-prs {
   flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.i-time {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.i-time .picked {
+  color: var(--dim);
+}
+
+.i-time .worked {
+  color: var(--faint);
 }
 
 .ref {
@@ -274,6 +353,31 @@ const ordered = computed(() => issues.value.toSorted((a, b) => b.number - a.numb
   font-family: var(--mono);
   font-size: 13px;
   white-space: nowrap;
+}
+
+/* Narrower than the other chips on purpose — a label is secondary context
+   sitting on its own line, and this row has the least width to spare. */
+.ref.label {
+  padding: 0 5px;
+  color: var(--dim);
+  font-size: 10px;
+  font-stretch: condensed;
+  letter-spacing: -0.01em;
+}
+
+.ref.label.target {
+  color: var(--cyan);
+  border-color: rgba(98, 170, 178, 0.35);
+}
+
+.ref.label.approved {
+  color: #8fd6a8;
+  border-color: rgba(143, 214, 168, 0.35);
+}
+
+.ref.label.done {
+  color: #2f7d4f;
+  border-color: rgba(47, 125, 79, 0.5);
 }
 
 .ref.pr {

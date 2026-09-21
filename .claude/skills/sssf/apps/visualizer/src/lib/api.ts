@@ -154,6 +154,10 @@ export interface LedgerIssue {
   title: string
   status: string | null
   stage: string | null
+  labels: string[]
+  launchable: boolean
+  pickedAt: string | null
+  activeMs: number | null
   prs: LedgerPr[]
   stages: LedgerStageRun[]
 }

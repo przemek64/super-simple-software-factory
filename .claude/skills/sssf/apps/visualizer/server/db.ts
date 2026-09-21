@@ -460,11 +460,12 @@ export class SssfDb {
           adw_name: string | null;
           status: string | null;
           started_at: string | null;
+          ended_at: string | null;
           request: string | null;
         },
         []
       >(
-        `SELECT adw_id, ${this.optionalColumn("sessions", "adw_name")}, status, started_at, request
+        `SELECT adw_id, ${this.optionalColumn("sessions", "adw_name")}, status, started_at, ended_at, request
            FROM sessions`,
       )
       .all();
@@ -520,6 +521,7 @@ export class SssfDb {
         adw_name: s.adw_name,
         status: s.status,
         started_at: s.started_at,
+        ended_at: s.ended_at,
         issue,
         pr: refs.pr !== null ? Number(refs.pr) : null,
       });
