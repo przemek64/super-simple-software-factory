@@ -17,14 +17,49 @@ every failure here is returned, not thrown.
 from __future__ import annotations
 
 import json
+import os
 import socket
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 __version__ = "0.1.0"
 
 SIGNAL_HOST = "127.0.0.1"
 SIGNAL_PORT = 7583
 RECIPIENT = "+353838506908"
+
+# Temporary mute, matching grey-factory's signal_notify.py. `send()` becomes a
+# no-op while this file exists beside the module, or while SIGNAL_NOTIFY_MUTE is
+# set. Added 2026-09-07 at the operator's request.
+#
+# A muted send reports delivered=True. That is the uncomfortable choice and it
+# is deliberate: `tick.py` re-attempts an escalation it believes never landed,
+# so delivered=False would retry on every tick forever. The detail string says
+# MUTED in full, and every suppressed message is echoed to stderr, so no reader
+# of a log can mistake this for somebody having been told.
+MUTE_FILE = Path(__file__).resolve().parent / "signal_notify.MUTED"
+
+
+# Paging is OFF unless a person turns it on for this process. The mute used to
+# be the exception -- an untracked marker file beside this module -- so a fresh
+# checkout, a run worktree, or a test process that reached the real `send()`
+# paged a muted operator anyway: ~20 messages a minute on 2026-09-22, carrying
+# fixture ids (run00001, pid 4321, #4) from a suite nobody thought could send.
+# An opt-in cannot be lost by cloning, and a test that forgets to patch `send`
+# is silent by construction.
+ENABLE_VAR = "SIGNAL_NOTIFY_ENABLE"
+
+
+def muted() -> str | None:
+    """Why sending is muted, or None when it is live."""
+    if os.environ.get("SIGNAL_NOTIFY_MUTE"):
+        return "SIGNAL_NOTIFY_MUTE is set"
+    if MUTE_FILE.exists():
+        return f"{MUTE_FILE.name} exists (delete it to restore paging)"
+    if not os.environ.get(ENABLE_VAR):
+        return f"{ENABLE_VAR} is not set (paging is opt-in)"
+    return None
 
 
 @dataclass(frozen=True)
@@ -42,6 +77,14 @@ def send(
     timeout: float = 10.0,
 ) -> EscalationResult:
     """Deliver one message. Never raises."""
+    reason = muted()
+    if reason is not None:
+        print(f"escalate: MUTED ({reason}); NOT sent: {message}", file=sys.stderr)
+        # ASCII only: this lands in `stuck.detail` and then the tick log, and a
+        # cp1252 console cannot encode an em dash -- that is what crashed
+        # `highspeed.py --plan` on a smart quote in a blocked_reason.
+        return EscalationResult(True, f"MUTED ({reason}) - nobody was paged")
+
     request = {
         "jsonrpc": "2.0",
         "method": "send",

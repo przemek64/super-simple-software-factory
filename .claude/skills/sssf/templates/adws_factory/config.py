@@ -56,6 +56,13 @@ class Limits:
     # Every launch, whatever happened. A hard ceiling that infrastructure
     # failures cannot dodge, so a wedged environment still terminates.
     launch_ceiling: int = 12
+    # Identical failures in a row before the item is parked. Two, because the
+    # second identical failure is the one that proves the first was not a
+    # blip: the environment or the work is wrong and another launch spends
+    # the budget to learn nothing. Counts every failure class, unlike
+    # `work_attempts` -- an item that dies the same way every time is the
+    # case this exists for, and its classification is usually "unknown".
+    repeat_failure_ceiling: int = 2
     # Review-then-fix stops when a round is clean, or after this many rounds
     # regardless. Without it the pair cycles forever: fixing changes the
     # revision, which staleness-checks the review that preceded it.

@@ -218,6 +218,39 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
             clean_exit = True
             return run.finish(accepted=True, reason="")
 
+        # What was ALREADY failing on this PR head, before the fix touched
+        # anything. Without it this ADW asks "is everything green?" while p1
+        # asks "did I break anything new?", so a repository whose suite is red
+        # for its own reasons can never land a repair here: ten consecutive
+        # runs on PR #282 died on six failures none of them caused.
+        baseline = git_helper.rev("HEAD", cwd=run.work_root)
+        base_failures = quality.read_baseline(run, baseline)
+        with run.phase(PhaseParams(name="baseline_tests", kind="code", owner="quality",
+                                   description="Measure the suite on the PR head — a failure "
+                                               "already here is not this run's to answer for")) as ph:
+            if base_failures is None:
+                base_check = quality.test(run)
+                if quality.measurable(base_check):
+                    base_failures = quality.ids_from_check(base_check)
+                    quality.write_baseline(run, baseline, base_failures,
+                                           command=base_check.command)
+                    ph.log(measured=git_helper.short_sha(baseline, cwd=run.work_root),
+                           already_failing=len(base_failures),
+                           artifacts=base_check.output_artifact)
+                else:
+                    # The suite did not finish. It measured nothing, so nothing
+                    # is cached: a cached empty result would mark this head
+                    # clean for every later run and restore the strict
+                    # rejection this phase exists to prevent.
+                    base_failures = None
+                    ph.log(unmeasured=git_helper.short_sha(baseline, cwd=run.work_root),
+                           exit_code=base_check.returncode,
+                           note="suite did not finish; nothing cached, this run is judged strictly",
+                           artifacts=base_check.output_artifact)
+            else:
+                ph.log(reused=git_helper.short_sha(baseline, cwd=run.work_root),
+                       already_failing=len(base_failures))
+
         findings_path = coderabbit.write_findings(review, run=run)
         axis_path = coderabbit.write_two_axis_findings(axis_review, run=run)
 
@@ -276,6 +309,15 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
 
         test = run_suite("retest")
 
+        def green(result) -> bool:
+            """Green enough to land: nothing failing that the head was not already failing."""
+            check = result.checks[-1]
+            if not check.passed and quality.accepts(check, base_failures):
+                run.console.note(
+                    f"quality test: {len(quality.ids_from_check(check))} failure(s), all "
+                    f"already failing on the PR head — nothing new, accepting")
+            return quality.accepts(check, base_failures)
+
         # The reviewer gets to send work back, exactly as the SDLC chain does.
         # Without this a single blocking remark ends the run and discards a fix
         # that was otherwise complete — run 3aa56ee7 died on one test asserting
@@ -283,7 +325,7 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
         # green and two of three findings fully repaired.
         review_verdict = None
         revised = False
-        if test.passed:
+        if green(test):
             for i in range(1, MAX_REVISION_LOOPS + 1):
                 with run.phase(PhaseParams(name=f"review_{i}", kind="agent", owner="reviewer",
                                            description="Confirm each accepted finding is genuinely "
@@ -316,7 +358,7 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
             if revised and review_verdict is not None and review_verdict.approved:
                 test = run_suite("final_test")
 
-        verified = test.passed and review_verdict is not None and review_verdict.approved
+        verified = green(test) and review_verdict is not None and review_verdict.approved
         if verified:
             with run.phase(PhaseParams(name="commit_fix", kind="code", owner="git",
                                        description="Land the repair only now: green suite, "

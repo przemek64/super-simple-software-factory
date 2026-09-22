@@ -58,9 +58,31 @@ class ItemBudget:
     # unresolved blocker pages the operator once a minute all night. Storing the
     # reason rather than a flag means a genuinely new blocker still gets through.
     escalated_fingerprint: str | None = None
+    # How many times in a row this item ended the SAME way, and what that way
+    # was. Counted on every failed reap, whatever its class: issue #281 failed
+    # ten times with `work_attempts` at 1, because a failure classified
+    # "unknown" spares the work budget on purpose. Nothing else was counting,
+    # so nothing stopped it and the item parked on the launch ceiling with no
+    # reason on disk. A run that lands its artifact clears both fields.
+    failure_streak: int = 0
+    failure_signature: str | None = None
 
     def spend_launch(self) -> None:
         self.launches += 1
+
+    def record_failure(self, signature: str) -> int:
+        """Count one ended-badly run. Returns the streak this failure makes."""
+        if signature == self.failure_signature:
+            self.failure_streak += 1
+        else:
+            self.failure_signature = signature
+            self.failure_streak = 1
+        return self.failure_streak
+
+    def record_progress(self) -> None:
+        """Something worked. The streak describes repetition, so it ends here."""
+        self.failure_streak = 0
+        self.failure_signature = None
 
     def spend_work_attempt(self) -> None:
         self.work_attempts += 1

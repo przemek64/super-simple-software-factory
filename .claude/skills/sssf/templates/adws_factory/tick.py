@@ -386,6 +386,17 @@ def request_review_if_head_moved(
     return f" (requested a full review of {pr.revision[:8]})"
 
 
+def _streak_note(config: FactoryConfig, streak: int) -> str:
+    """The repetition, said out loud in the reap line a person reads.
+
+    Ten reap lines in a row said "unknown error" and nothing said they were
+    the same error. The count is what turns a log into a signal.
+    """
+    if streak < 2:
+        return ""
+    return f" [same failure {streak}x/{config.limits.repeat_failure_ceiling}]"
+
+
 def reap(
     config: FactoryConfig, paths: FactoryPaths, state: FactoryState, report: TickReport,
     dry_run: bool = False,
@@ -433,6 +444,7 @@ def reap(
             asked = request_review_if_head_moved(
                 config, paths, stage, run, pr, report, dry_run=dry_run
             )
+            budget.record_progress()
             if stage.name == config.stages[-1].name:
                 # Completing the last stage is what closes a review-then-fix
                 # round, so it is counted here, against the artifact -- the same
@@ -456,9 +468,10 @@ def reap(
             # and parked healthy items on crashes nobody's agent caused. The
             # launch ceiling still terminates a run that dies every time.
             state.untrack(run.adw_id)
+            streak = budget.record_failure(f"{run.stage}:no-record")
             report.reaped.append(
                 f"{run.adw_id} {run.stage} on #{run.item}: infrastructure -- "
-                f"vanished with no record{worktree_note}"
+                f"vanished with no record{worktree_note}{_streak_note(config, streak)}"
             )
             continue
 
@@ -468,6 +481,7 @@ def reap(
             # Describing this as a failure with nothing recorded reads as a bug
             # in the factory and costs someone a debugging session.
             state.untrack(run.adw_id)
+            budget.record_progress()
             report.reaped.append(
                 f"{run.adw_id} {run.stage} on #{run.item}: run succeeded but the "
                 f"stage is open again -- new work arrived after it finished"
@@ -476,18 +490,25 @@ def reap(
 
         failure_class, detail = classify_failure(record)
         state.untrack(run.adw_id)
+        # Counted for EVERY class, before the classes diverge. The work budget
+        # is deliberately spared by two of the three, which is why an item can
+        # fail identically ten times with that budget at 1 (issue #281).
+        streak = budget.record_failure(f"{run.stage}:{failure_class}:{detail}")
+        repeats = _streak_note(config, streak)
         if failure_class == "work":
             budget.spend_work_attempt()
             report.reaped.append(
                 f"{run.adw_id} {run.stage} on #{run.item}: work failure "
-                f"({budget.work_attempts}/{config.limits.work_attempts}) -- {detail}{worktree_note}"
+                f"({budget.work_attempts}/{config.limits.work_attempts}) -- {detail}"
+                f"{worktree_note}{repeats}"
             )
         else:
             # Infrastructure and unknown both spare the work budget. Unknown
             # errs this way on purpose: the launch ceiling still terminates a
             # wedged environment, and parking a healthy item is the worse harm.
             report.reaped.append(
-                f"{run.adw_id} {run.stage} on #{run.item}: {failure_class} -- {detail}{worktree_note}"
+                f"{run.adw_id} {run.stage} on #{run.item}: {failure_class} -- "
+                f"{detail}{worktree_note}{repeats}"
             )
 
 
@@ -803,10 +824,33 @@ def enforce_budgets(
     config: FactoryConfig, paths: FactoryPaths, state: FactoryState, report: TickReport,
     dry_run: bool = False,
 ) -> None:
-    """Park items whose work budget is spent. Writes no label under `dry_run`."""
+    """Park items whose budget is spent or that keep failing the same way.
+
+    Two independent reasons, one pass. The streak is not a second work budget:
+    it stops an item that repeats ITSELF, whatever class its failures are, and
+    the reason it records is the failure's own text -- so a person reading
+    `state.json` afterwards is told what kept happening rather than finding
+    `blocked_reason: null` and a spent launch count.
+    """
     for key, budget in state.budgets.items():
-        if budget.is_blocked or budget.work_attempts < config.limits.work_attempts:
+        if budget.is_blocked:
             continue
+        spent = budget.work_attempts >= config.limits.work_attempts
+        repeating = budget.failure_streak >= config.limits.repeat_failure_ceiling
+        at_ceiling = budget.launches >= config.limits.launch_ceiling
+        if not (spent or repeating or at_ceiling):
+            continue
+        if at_ceiling and not (spent or repeating):
+            # The ceiling stops launches by itself, in `select`, but it wrote
+            # nothing down: #281 sat there with `blocked_reason: null`, so
+            # neither a person nor a later tick could say what had stopped it.
+            reason = (f"launch ceiling {config.limits.launch_ceiling} reached; "
+                      f"last failure: {budget.failure_signature or 'not recorded'}")
+        elif repeating:
+            reason = (f"{budget.failure_streak} identical failures: "
+                      f"{budget.failure_signature}")
+        else:
+            reason = f"{budget.work_attempts} work failures"
         item = int(key)
         try:
             stage, _ = current_position(config, paths, item)
@@ -814,14 +858,14 @@ def enforce_budgets(
             continue
         stage_name = stage.name if stage else config.stages[-1].name
         if dry_run:
-            report.notes.append(f"would park #{item} blocked at {stage_name}")
+            report.notes.append(f"would park #{item} blocked at {stage_name}: {reason}")
             continue
-        budget.block(stage_name, f"{budget.work_attempts} work failures")
+        budget.block(stage_name, reason)
         try:
             labels.mark_blocked(config, item, stage_name, paths.root)
         except labels.LabelError as error:
             report.errors.append(f"#{item}: cannot mark blocked: {error}")
-        report.notes.append(f"#{item}: parked blocked at {stage_name}")
+        report.notes.append(f"#{item}: parked blocked at {stage_name}: {reason}")
 
 
 def run_tick(config: FactoryConfig, paths: FactoryPaths, dry_run: bool = False) -> TickReport:
