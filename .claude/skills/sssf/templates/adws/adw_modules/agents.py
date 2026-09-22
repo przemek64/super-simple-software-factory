@@ -309,10 +309,26 @@ def _enforce_agent_boundaries(run, phase: Phase, agent: AgentConfig,
         touched = permissions.enforce(run, phase, agent, tree_before)
     except Exception as error:
         errors.append(error)
+    # Restores the canonical and sibling checkouts, and reports what it undid.
+    # It does not raise: those roots are outside the agent's worktree, so a
+    # change there cannot be attributed to the agent, and killing the phase for
+    # one destroyed finished work. A raise here is still a real failure.
+    outside: list[tuple] = []
     try:
-        permissions.enforce_safety(run, safety_before)
+        outside = permissions.enforce_safety(run, safety_before)
     except Exception as error:
         errors.append(error)
+
+    if outside:
+        try:
+            run.tracer.event(EventRecord(
+                adw_id=run.adw_id, phase_id=phase.phase_id,
+                type="warning", name="unattributed_change_restored",
+                payload={"agent": agent.name,
+                         "changes": [f"{root / path} — {outcome}"
+                                     for root, path, outcome in outside]}))
+        except Exception:
+            pass
 
     if errors:
         breach = errors[0] if len(errors) == 1 else ExceptionGroup(

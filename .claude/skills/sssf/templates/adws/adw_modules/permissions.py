@@ -133,6 +133,29 @@ _BASH_DYNAMIC_RE = re.compile(
 # match must also be absolute by pathlib's rules -- on Windows that means a
 # drive letter, so a leading "/" alone is drive-relative, not an escape.
 _ABSOLUTE_PATH_RE = re.compile(r"(?<![\w./\\])(?:[A-Za-z]:[\\/]|/)[^\s'\"<>|;&,)]*")
+
+# What each refused construct is called, so the refusal can say which one it saw.
+_HIDDEN_PATH_CONSTRUCTS = [
+    (re.compile(r"`"), "backtick command substitution"),
+    (re.compile(r"\$\("), "$() command substitution"),
+    (re.compile(r"[<>]\("), "process substitution"),
+    (re.compile(r"\$[A-Za-z_{]"), "shell variable expansion"),
+    (re.compile(r"%[^%\s]+%"), "Windows %VAR% expansion"),
+    (re.compile(r"![^!\s]+!"), "delayed !VAR! expansion"),
+    (re.compile(r"<<"), "heredoc"),
+]
+
+
+def _hidden_path_construct(command: str) -> Optional[str]:
+    """Name the first path-hiding construct in `command`, or None if clean."""
+    if not (_BASH_DYNAMIC_RE.search(command) or "<<" in command):
+        return None
+    for pattern, name in _HIDDEN_PATH_CONSTRUCTS:
+        if pattern.search(command):
+            return name
+    return "unreadable expansion"
+
+
 _BASH_GLOB_RE = re.compile(r"[*?\[\]]")
 # A URL is not a filesystem path. `https://auth.docker.io/token?service=...`
 # was read by the scan above as the UNC path //auth.docker.io/token?... --
@@ -182,10 +205,12 @@ def _is_exempt(path_str: str) -> bool:
 _SNAPSHOT_READ_ATTEMPTS = 3
 
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(/|$)")
+_WSL_DRIVE_RE = re.compile(r"^/mnt/([A-Za-z])(/|$)")
 
 
 def _from_msys_drive(normalized: str) -> str:
-    """Translate a Git-Bash drive path (`/c/dev/x`) to its Windows form.
+    """Translate a Git-Bash (`/c/dev/x`) or WSL (`/mnt/c/dev/x`) drive path to
+    its Windows form.
 
     pi's bash tool runs Git Bash, where `/c/...` IS `C:\\...`. Windows sees a
     leading slash with no drive letter as NOT absolute, so the path was joined
@@ -193,10 +218,19 @@ def _from_msys_drive(normalized: str) -> str:
     checkout into `C:\\c\\dev\\projects\\...`, a path that exists nowhere and
     therefore lies outside every root. The refusal named that invented path,
     which is why it read as nonsense.
+
+    `/mnt/c/...` is the same failure one layer up, and it is not hypothetical:
+    a `wsl bash -lc "cd /mnt/c/dev/..."` call became `C:\\mnt\\c\\dev\\...`,
+    outside every root, so EVERY such call was refused unconditionally. WSL
+    mounts the Windows drives there, so `/mnt/c/x` and `C:\\x` are one file and
+    must bounds-check as one.
+
+    Checked before the Git-Bash form: `/mnt/...` cannot match a single-letter
+    drive rule, but pinning the order keeps the two from ever competing.
     """
     if os.name != "nt":
         return normalized
-    match = _MSYS_DRIVE_RE.match(normalized)
+    match = _WSL_DRIVE_RE.match(normalized) or _MSYS_DRIVE_RE.match(normalized)
     if not match:
         return normalized
     return f"{match.group(1)}:/{normalized[match.end():]}"
@@ -493,8 +527,17 @@ def _analyze_bash(
     # every line of a multi-line script is analysed as its own command. Blocking
     # them outright rejected ordinary agent behaviour -- any two-line script or
     # commented command killed the run on its first tool call.
-    if _BASH_DYNAMIC_RE.search(command) or "<<" in command:
-        return False, [], [], "uses dynamic or opaque shell syntax"
+    hidden = _hidden_path_construct(command)
+    if hidden:
+        # Name the construct and the way out. The bare "dynamic or opaque"
+        # refusal told the agent nothing it could act on, so it retried the same
+        # shape until the attempt budget was gone -- three runs in one night.
+        return False, [], [], (
+            f"uses dynamic or opaque shell syntax ({hidden}), which hides a path "
+            f"from the guard. Rewrite it with literal paths: no backticks or $(), "
+            f"no <() or >(), no $VAR/%VAR%/!VAR!, no heredocs. Everything else -- "
+            f"any command, pipes, redirection, globs, quoted one-liners -- is "
+            f"allowed as long as every path it names is inside this worktree.")
 
     root = _named_path(str(work_root), work_root).resolve(strict=False)
     allowed_roots = tuple(
@@ -817,12 +860,18 @@ def validate_data_dir(repo_root: Path, configured: str | Path) -> Path:
     return data_dir
 
 
-def runtime_exclusions(run) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+def runtime_exclusions(
+    run, *, visualizer_surfaces: bool = False,
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     """Exclude a proven runtime root and exact untracked trace DB artifacts.
 
     Validation deliberately precedes the broad root exclusion. A checkout,
     ancestor, file, or subtree containing any tracked path fails closed rather
     than turning a broad data_dir setting into a source-monitoring bypass.
+
+    `visualizer_surfaces` additionally drops the operator-owned launcher
+    surfaces, and is for cross-worktree SAFETY MONITORING only. See the comment
+    at the bottom of this function for why direct enforcement must not use it.
     """
     canonical = Path(run.repo_root).resolve()
     data_dir = validate_data_dir(canonical, run.data_dir)
@@ -853,16 +902,35 @@ def runtime_exclusions(run) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     # so a human clicking in the UI mid-run surfaced here as "agent modified
     # canonical checkout state" and killed a healthy build phase 19 minutes in.
     #
-    # This costs no protection: defaults.protected_files already forbids EVERY
-    # agent from writing adws/adw_sssf_config/ at all, so the guard is not what
-    # was stopping an agent from touching these.
+    # SAFETY MONITORING ONLY. An earlier version of this claimed the exclusion
+    # "costs no protection, because defaults.protected_files already forbids
+    # every agent from writing adws/adw_sssf_config/". That was wrong, and it
+    # opened a hole: in DIRECT enforcement (snapshot/enforce, work_root ==
+    # repo_root) the exclusion is applied to the snapshot itself, so an excluded
+    # path never reaches changed_paths and permitted() is never asked about it.
+    # protected_files cannot forbid a write the guard has already discarded, so
+    # an agent in the canonical checkout could rewrite launchers.yaml or
+    # diagrams/ with no breach and no rollback.
+    #
+    # Cross-worktree monitoring is the case this was built for and the only one
+    # that keeps its protection: there the canonical checkout is not the tree
+    # the agent may write, every change to it is a breach by definition, and the
+    # exclusion only decides whether an OPERATOR's dashboard edit is wrongly
+    # attributed to the running agent -- which is what killed a healthy build
+    # phase 19 minutes in.
+    #
+    # The cost of the narrower rule: a run working directly in the canonical
+    # checkout will again fail if an operator edits these files mid-run. That is
+    # the correct trade -- in that mode the operator and the agent write the same
+    # tree, so the two are genuinely indistinguishable, and a false failure is
+    # cheaper than a silent unguarded write to a protected path.
     #
     # Excluded by path whatever their tracked state. These are now tracked
     # (50b42ac), and an untracked-only rule silently stopped excluding them the
     # moment they were committed -- reinstating the very false positive above.
-    # Tracked state is the wrong signal here: what makes these safe to exclude
-    # is that no agent may write adws/adw_sssf_config/ at all, which holds
-    # whether or not the files are in the index.
+    if not visualizer_surfaces:
+        return roots, exact
+
     for relative in (Path("adws/adw_sssf_config/launchers.yaml"),
                      Path("adws/adw_sssf_config/diagrams")):
         candidate = (canonical / relative).resolve()
@@ -1188,7 +1256,7 @@ def safety_snapshot(run) -> SafetySnapshot:
     if len(roots) > budget.max_worktrees:
         raise SnapshotLimitExceeded(
             f"permission snapshot worktree limit exceeded ({len(roots)}>{budget.max_worktrees})")
-    excluded_roots, excluded_paths = runtime_exclusions(run)
+    excluded_roots, excluded_paths = runtime_exclusions(run, visualizer_surfaces=True)
     snapshots = SafetySnapshot()
     try:
         for root in sorted(roots, key=lambda item: str(item).casefold()):
@@ -1349,11 +1417,42 @@ def _roll_back(run, paths: list[str], before: dict[str, FileState],
     return _restore_paths(Path(run.work_root), paths, before, after)
 
 
-def enforce_safety(run, before: SafetySnapshot) -> None:
-    """Reject and undo attributable writes while the shared guard is held."""
+def _salvage(run, root: Path, relative: str) -> str | None:
+    """Copy a file about to be restored, so undoing a change never destroys it.
+
+    The guard cannot tell whose change it is undoing. When it is the operator's,
+    a silent overwrite is data loss -- so keep a copy before the restore and say
+    where it went. Best effort: failing to salvage must not stop the restore.
+    """
+    source = root / relative
+    try:
+        if not source.is_file():
+            return None
+        destination = (Path(run.context_handoff_dir) / "safety-salvage"
+                       / root.name / relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        return str(destination)
+    except (OSError, AttributeError):
+        return None
+
+
+def enforce_safety(run, before: SafetySnapshot) -> list[tuple[Path, str, str]]:
+    """Undo changes to the canonical or sibling checkouts and report them.
+
+    Does NOT raise. A change here is outside the agent's worktree, which is
+    where the agent works, so the guard cannot attribute it -- and it killed
+    four phases for changes nobody could pin on anyone, two of them the
+    operator's own edits. One of those discarded finished work that had to be
+    recovered from a leftover worktree afterwards.
+
+    So the tree is still restored, and the change is still reported, but the
+    phase is no longer destroyed over it. Writes the agent CAN be held to are
+    inside its worktree and are enforced by `enforce`, which still raises.
+    """
     breaches: list[tuple[Path, str, str]] = []
     canonical = Path(run.repo_root).resolve()
-    excluded_roots, excluded_paths = runtime_exclusions(run)
+    excluded_roots, excluded_paths = runtime_exclusions(run, visualizer_surfaces=True)
     comparison_budget = _budget(run)
     try:
         for root, prior in before.items():
@@ -1382,19 +1481,18 @@ def enforce_safety(run, before: SafetySnapshot) -> None:
                 # and the note deleted -- the agent had never touched it.
                 ignored = _git_ignored(root, changed)
                 changed = [p for p in changed if p.replace("\\", "/") not in ignored]
+                saved = {path: _salvage(run, root, path) for path in changed}
                 outcomes = _restore_paths(root, changed, prior, after) if changed else {}
-                breaches.extend((root, path, outcomes[path]) for path in changed)
+                breaches.extend(
+                    (root, path,
+                     outcomes[path] + (f"; salvaged to {saved[path]}" if saved[path] else ""))
+                    for path in changed
+                )
             finally:
                 after.close()
-        if breaches:
-            detail = "\n".join(
-                f"  - {root / path} — {outcome}" for root, path, outcome in breaches
-            )
-            raise PermissionBreach(
-                "agent modified canonical or sibling checkout state:\n" + detail
-            )
     finally:
         before.close()
+    return breaches
 
 
 def _git_ignored(root: Path, paths: list[str]) -> set[str]:

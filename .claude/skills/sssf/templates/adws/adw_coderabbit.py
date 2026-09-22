@@ -33,6 +33,7 @@ after a clean run and LEFT BEHIND on a failure, so there is something to inspect
 """
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -78,12 +79,39 @@ def _gh_json(path: str, jq: str, *, cwd: Path) -> str:
 
 
 def current_repo(*, cwd: Path) -> str:
+    """`owner/name` for this checkout, read from the git remote — no API call.
+
+    This was `gh repo view`, which is a GraphQL call, so a GitHub outage killed
+    the run here -- at line 130, before it had registered with the tracer. The
+    factory then found a dead process with no record, reaped it as "vanished
+    with no record", and charged a WORK attempt for work that never started.
+    Two of those took issue #5 to 2 of 3 during one afternoon's partial outage;
+    a third would have parked it.
+
+    The error message made it worse by naming the wrong cause: it said to pass
+    `--repo`, when nothing was wrong with the arguments.
+
+    The remote URL is local, authoritative, and cannot be taken down. `gh` is
+    kept only as a fallback for a checkout with no usable remote.
+    """
+    remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=cwd,
+                            capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
+    if remote.returncode == 0:
+        url = (remote.stdout or "").strip()
+        # https://github.com/owner/name(.git) and git@github.com:owner/name(.git)
+        match = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url)
+        if match:
+            return match.group(1)
+
     result = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner",
                              "--jq", ".nameWithOwner"], cwd=cwd,
                             capture_output=True, text=True,
                             encoding="utf-8", errors="replace")
     if result.returncode != 0:
-        raise RuntimeError("could not determine the repository — pass --repo owner/name.")
+        raise RuntimeError(
+            f"could not determine the repository from the git remote in {cwd} "
+            f"or from gh ({(result.stderr or '').strip()[:120]}) — pass --repo owner/name.")
     return (result.stdout or "").strip()
 
 

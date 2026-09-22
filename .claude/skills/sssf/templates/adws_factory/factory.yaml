@@ -1,0 +1,58 @@
+# The factory's own configuration. `adws_factory/config.py` documents every
+# key; this file holds only what the first deployment overrides.
+
+supervisor:
+  # The health poll (docs/supervisor.md in super-simple-software-factory):
+  # how often the scheduled task runs, how long a silent loop is tolerated
+  # before it is called dead, how long an escalated item may wait for a
+  # person before the escalation is called unanswered, and how many polls
+  # must agree -- per signal, every signal alike -- before a person is paged.
+  #
+  # `repeat_polls` applies independently once any signal first becomes a
+  # candidate. Every candidate is visible in supervisor-status.json on its
+  # FIRST poll; escalation and the diagnosis agent become due only after
+  # this many identical consecutive polls. The threshold is two, not one,
+  # so a momentary reading (a disk blip, a quota snapshot mid-rewrite)
+  # never pages anybody; anything below two is refused at load.
+  poll_interval_minutes: 1
+  silence_window_seconds: 300
+  escalation_grace_seconds: 3600
+  # The diagnosis agent's launch cooldown per signal/item: how long one
+  # launch suppresses the next for that incident. A guard against stacking
+  # -- a new agent every tick while the first is still working, the failure
+  # that reset a good pull request on the predecessor project. Not the
+  # external-review or unanswered-human grace: those time a person, this
+  # one times a launch against its own successor.
+  diagnosis_grace_seconds: 1800
+  repeat_polls: 2
+  # Recovery code synced from labeltool. Arm this repository separately.
+  recovery:
+    restart_driver: false
+    stop_hung_runs: false
+    reap_dead_runs: false
+    hung_min_age_seconds: 7200
+    hung_idle_seconds: 3600
+    restart_cooldown_seconds: 300
+    max_restart_attempts: 3
+  capabilities:
+    loop_dead: true              # the loop-dead signal is live
+    item_stalled: true           # the stalled-item signal is live
+    escalation_unanswered: true  # the unanswered-escalation signal is live
+    disk_below_floor: true       # the free-space floor signal is live
+    provider_credit_exhausted: true  # the drained-provider signal is live
+    run_vanished: true           # the dead-run-without-artifact signal is live
+    page: true                   # a firing signal may reach a person through Signal
+  # The supervisor's five item actions. Each flag is independent and arms
+  # exactly one action: changing `may_clear_budget` affects neither detection,
+  # paging, diagnosis dispatch, nor the other four actions. Every action the
+  # diagnostician reaches is recorded as a WOULD-ACT line either way; a flag
+  # here only decides whether that one recorded action is then performed by
+  # the next serialized poll. All five stay dry_run until a person turns one
+  # on deliberately -- an automated gate that enacted its own judgement once
+  # destroyed a pull request that had met most of its requirements.
+  item_actions:
+    may_clear_budget: dry_run     # clear only that item's persisted budget
+    may_relaunch_item: dry_run    # launch one eligible stage for the parked item
+    may_page_again: dry_run       # send one new item escalation through Signal
+    may_hold_item: dry_run        # add the configured factory-hold label
+    may_request_review: dry_run   # post one full-review request for the PR head

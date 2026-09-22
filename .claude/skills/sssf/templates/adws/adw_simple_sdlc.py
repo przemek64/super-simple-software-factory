@@ -54,12 +54,16 @@ from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
-# Three, not two: run cc634468 (issue #3) exhausted two loops sitting one test
-# case short of approval — the reviewer's last blocking item was a single named
-# rejection case. A third slot is the difference between landing that work and
-# throwing a 4.4M-token run away. Still bounded: the loop must end, and an
-# unapproved build is never committed.
-MAX_REVISION_LOOPS = 3
+# Four, not three. The loop breaks at `i == MAX_REVISION_LOOPS` BEFORE revising,
+# so N loops buy N reviews but only N-1 repairs: at 3 the final review was
+# computed, paid for and discarded unused. Run 577358e2 (issue #5) ended that
+# way at 20 of 21 requirements, and its unused review named the remaining defect
+# by file and line. A fourth slot turns that last review into a repair.
+#
+# It is one more attempt, not a fix for a run that is not converging: every
+# revision in that run introduced a fresh bug in the same code (6 unmet -> 1 ->
+# 1). Still bounded, and an unapproved build is still never committed.
+MAX_REVISION_LOOPS = 4
 
 DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the "
                   "diff shows, then copy the write-up into app_docs/ as your task "
@@ -100,10 +104,15 @@ def main(prompt: str | None = None,
     run = session.ensure(cfg, adw_id, repo_root=repo_root, prompt=prompt, base=base)
     baseline = git_helper.rev("HEAD", cwd=run.work_root)  # before run commits
 
-    def commit(ph, envelope) -> None:
-        """Commit what the preceding phase produced, in that agent's own words."""
+    def commit(ph, envelope, since: str | None = None) -> None:
+        """Commit what the preceding phase produced, in that agent's own words.
+
+        `since` lets a clean tree still count as delivered work when the agent
+        committed it itself -- see git_helper.commit_all.
+        """
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(message, cwd=run.work_root), message=message)
+        ph.log(sha=git_helper.commit_all(message, cwd=run.work_root, since=since),
+               message=message)
 
     def record(ph, result) -> None:
         """Log a deterministic block's verdict — the same shape every ADW uses."""
@@ -115,6 +124,40 @@ def main(prompt: str | None = None,
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt, baseline=git_helper.short_sha(baseline, cwd=run.work_root))
 
+    # What was ALREADY failing here, before this run touched anything. Measured
+    # on the base commit and cached against it, so the cost is one suite run per
+    # base rather than one per run. Without it a repository whose suite is red
+    # for its own reasons can never accept any work: every run inherits those
+    # failures, the builder is blamed for them, and a correct implementation is
+    # rejected. See quality.py for the incident this comes from.
+    base_failures = quality.read_baseline(run, baseline)
+    with run.phase(PhaseParams(name="baseline_tests", kind="code", owner="quality",
+                               description="Measure the suite on the base — a failure "
+                                           "already here is not this run's to answer for")) as ph:
+        if base_failures is None:
+            check = quality.test(run)
+            if quality.measurable(check):
+                base_failures = quality.ids_from_check(check)
+                quality.write_baseline(run, baseline, base_failures, command=check.command)
+                ph.log(measured=git_helper.short_sha(baseline, cwd=run.work_root),
+                       already_failing=len(base_failures),
+                       artifacts=check.output_artifact)
+            else:
+                # The suite did not finish -- a timeout, a collection error, a
+                # crash. It measured nothing, so nothing is cached: caching an
+                # empty result here would mark this base "clean" for every run
+                # that follows and quietly restore the strict rejection this
+                # phase exists to prevent. Fall through unmeasured, which is
+                # strict for THIS run only, and say so loudly.
+                base_failures = None
+                ph.log(unmeasured=git_helper.short_sha(baseline, cwd=run.work_root),
+                       exit_code=check.returncode,
+                       note="suite did not finish; nothing cached, this run is judged strictly",
+                       artifacts=check.output_artifact)
+        else:
+            ph.log(reused=git_helper.short_sha(baseline, cwd=run.work_root),
+                   already_failing=len(base_failures))
+
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
         plan = ph.call(AgentCall(output_type=PlanOutput, prompt=prompt,
@@ -123,6 +166,7 @@ def main(prompt: str | None = None,
     with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
                                description="Put the spec on record before any code exists to blur it")) as ph:
         commit(ph, plan)
+        plan_head = git_helper.rev("HEAD", cwd=run.work_root)
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the plan exactly")) as ph:
@@ -137,14 +181,22 @@ def main(prompt: str | None = None,
             test = quality.run_tests(run)
             record(ph, test)
 
-        if test.passed:
+        check = test.checks[-1]
+        new_failures = quality.regressions(check, base_failures)
+        if quality.accepts(check, base_failures):
+            if not test.passed:
+                run.console.note(
+                    f"quality test: {len(quality.ids_from_check(check))} failure(s), all "
+                    f"already failing on the base — nothing new, accepting")
             break
 
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
-                                   description="Repair what the suite reported, from its "
-                                               "verbatim output")) as ph:
+                                   description="Repair what this run broke — failures that "
+                                               "were already on the base are not in scope")) as ph:
+            ph.log(new_failures=len(new_failures),
+                   pre_existing=len(quality.ids_from_check(check)) - len(new_failures))
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                      previous=quality.as_envelope(test, "tests"),
+                                      previous=quality.as_regression_envelope(test, new_failures),
                                       gates=[gates.diff_matches_claims]))
 
     review = None
@@ -176,12 +228,29 @@ def main(prompt: str | None = None,
     # Red tests or a rejected review stop the chain here: the code stays
     # uncommitted and nothing is documented, because there is nothing worth
     # describing yet. The plan commit stands — it is a record of what was asked.
-    verified = (test is not None and test.passed
-                and review is not None and review.approved)
+    # "Clean" means this run introduced no failure, not that the repository is
+    # spotless. A suite that was red before the run started stays red after it
+    # and says nothing about the work; only a test that passed on the base and
+    # fails now is this run's to answer for.
+    suite_clean = (test is not None
+                   and quality.accepts(test.checks[-1], base_failures))
+    verified = suite_clean and review is not None and review.approved
+
+    # A green suite with an unapproved review is not the same failure as a
+    # broken build, and treating them alike threw away run 577358e2: 14.3M
+    # tokens, 20 of 21 requirements met, and the code left uncommitted in a
+    # worktree while the next run rebuilt it from nothing. When the suite is
+    # green and the reviewer is nearly satisfied, the branch goes out as a
+    # DRAFT carrying the open items, so p2/p3 and a person work on real code.
+    # The draft is the safety: the factory decider refuses to merge one.
+    readiness = None
+    if not verified and suite_clean and review is not None:
+        readiness = delivery.grade(review)
+
     if verified:
         with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
                                    description="Land the code only now: green suite, approved review")) as ph:
-            commit(ph, build)
+            commit(ph, build, since=plan_head)
 
         with run.phase(PhaseParams(name="changes", kind="code", owner="git",
                                    description="Diff the whole run against its pinned baseline, for the documenter")) as ph:
@@ -219,8 +288,41 @@ def main(prompt: str | None = None,
                    state=pull_request.state,
                    action="created" if pull_request.created else "reused")
 
-    return run.finish(accepted=verified,
-                      reason="the suite or the review never came back clean")
+    elif readiness is not None and readiness.deliverable:
+        with run.phase(PhaseParams(name="deliver_draft", kind="code", owner="git",
+                                   description="Push the unapproved but nearly-finished "
+                                               "branch as a draft, with the open items")) as ph:
+            commit(ph, build)
+            pull_request = delivery.deliver(
+                run, verified=False, document=None, issue_number=issue_number,
+                review=review, readiness=readiness,
+            )
+            if pull_request is None:
+                raise RuntimeError("a deliverable readiness returned no pull request")
+            ph.log(pr=f"PR #{pull_request.number}", url=pull_request.url,
+                   draft="yes", readiness=readiness.reason,
+                   action="created" if pull_request.created else "reused")
+
+    if verified:
+        return run.finish(accepted=True, reason="")
+    if readiness is not None and readiness.deliverable:
+        # Not accepted -- the reviewer did not approve it -- but the work is on
+        # a branch and in a draft PR, so say what actually happened.
+        return run.finish(
+            accepted=False,
+            reason=f"review not approved ({readiness.reason}); "
+                   f"delivered as a draft for the review stages")
+    # Name which half failed. "The suite or the review" sent a person reading
+    # the log looking for a red suite that was never this run's doing.
+    if not suite_clean and test is not None:
+        broke = len(quality.regressions(test.checks[-1], base_failures))
+        why = (f"{broke} test(s) that passed on the base now fail"
+               if broke else "the suite failed without naming a test")
+    elif review is not None and not review.approved:
+        why = "the reviewer did not approve"
+    else:
+        why = "the suite or the review never came back clean"
+    return run.finish(accepted=verified, reason=why)
 
 
 if __name__ == "__main__":

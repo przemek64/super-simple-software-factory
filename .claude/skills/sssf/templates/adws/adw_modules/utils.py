@@ -27,13 +27,58 @@ def operator_env() -> dict[str, str]:
     Stripping the venv restores parity: `python3` in an agent's bash is the
     same `python3` the engineer gets in their terminal. The ADW's own imports
     are unaffected; this env is only ever handed to child processes.
+
+    Both layouts have to go: a venv's executables live in `bin` on POSIX and in
+    `Scripts` on Windows. Removing only `bin` left the uv venv first on PATH for
+    every Windows run, so `python` was the ephemeral ADW environment all along —
+    the test block resolved an interpreter holding pydantic and pyyaml and no
+    pytest, and the suite failed at import as though the agent had broken it.
+    Comparison is normcase'd because PATH entries and the real directory differ
+    in case on Windows.
+
+    VIRTUAL_ENV is not the whole story, and believing it was cost a finished run.
+    `uv run` prepends TWO directories: the ephemeral venv it names in
+    VIRTUAL_ENV, and the cached BASE interpreter it built that venv from, which
+    it names nowhere:
+
+        ...\\uv\\cache\\builds-v0\\.tmpXXXX\\Scripts   <- VIRTUAL_ENV, stripped
+        ...\\uv\\cache\\archive-v0\\YYYY\\Scripts      <- not, and it survived
+        ...\\the-project\\.venv\\Scripts               <- what should have won
+
+    So `python` still resolved inside uv's cache, still had no pytest, and a p3
+    run that had fixed all six of its findings with every gate green was failed
+    by its own retest phase in 0.065s. Anything under uv's cache belongs to the
+    tool and never to the operator, so the whole cache goes.
     """
     env = os.environ.copy()
     venv = env.pop("VIRTUAL_ENV", "")
-    if not venv:
-        return env
-    venv_bin = str(Path(venv) / "bin")
-    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p and p != venv_bin]
+
+    venv_dirs = (
+        {os.path.normcase(str(Path(venv) / name)) for name in ("bin", "Scripts")}
+        if venv else set()
+    )
+
+    def is_uv_cache(entry: str) -> bool:
+        """Does this PATH entry live inside uv's cache, under any layout?
+
+        Matched on the cache ROOT, not on `builds-v0`/`archive-v0` by name:
+        those are uv's private layout, they have been renamed before, and a
+        version bump must not quietly restore this bug.
+        """
+        normalized = os.path.normcase(entry).replace("\\", "/").rstrip("/")
+        explicit = os.environ.get("UV_CACHE_DIR")
+        if explicit:
+            root = os.path.normcase(explicit).replace("\\", "/").rstrip("/")
+            if normalized == root or normalized.startswith(root + "/"):
+                return True
+        return "/uv/cache/" in normalized + "/"
+
+    parts = [
+        p for p in env.get("PATH", "").split(os.pathsep)
+        if p
+        and os.path.normcase(p.rstrip("\\/")) not in venv_dirs
+        and not is_uv_cache(p)
+    ]
     env["PATH"] = os.pathsep.join(parts)
     return env
 

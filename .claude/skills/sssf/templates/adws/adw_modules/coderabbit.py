@@ -209,6 +209,21 @@ def parse_inline_comments(comments: list[dict]) -> list[RabbitFinding]:
     for comment in comments:
         if (comment.get("user") or {}).get("login") != BOT_LOGIN:
             continue
+        if comment.get("in_reply_to_id"):
+            # A reply is conversation ABOUT a finding, never a finding. The
+            # thread it answers was already parsed on the pass that produced
+            # it, so counting the reply too both double-counts that finding and
+            # turns answering one into new work.
+            #
+            # Measured on PR #252: two findings were refused three rounds
+            # running because a refusal recorded only in the run's triage file
+            # is invisible to CodeRabbit. Replying with the reason worked -- it
+            # conceded both ("confirmed... the current test asserts the fixed
+            # reference-row count", "the hyphenation request is a style
+            # preference") -- and those two concessions were then ingested as
+            # findings ea9e7cb9b80c and c9860580c225. Engaging with the
+            # reviewer made the backlog grow.
+            continue
         body = comment.get("body") or ""
         lines = body.split("\n")
         category, severity, effort = _split_meta(lines[0] if lines else "")
@@ -282,12 +297,31 @@ def parse_nitpicks(review_body: str) -> list[RabbitFinding]:
     return findings
 
 
-def status(pr: int, *, repo: str, cwd: Path) -> ReviewStatus:
+def _is_rabbit_review_of(review: dict, head_sha: str = "") -> bool:
+    """A finished CodeRabbit review, of `head_sha` when one is named."""
+    if (review.get("user") or {}).get("login") != BOT_LOGIN:
+        return False
+    if MARKER_ACTIONABLE not in (review.get("body") or ""):
+        return False
+    return not head_sha or (review.get("commit_id") or "") == head_sha
+
+
+def status(pr: int, *, repo: str, cwd: Path, head_sha: str = "") -> ReviewStatus:
     """Where this PR's review stands, judged on CONTENT rather than existence.
 
     "the bot has commented" is true ~40 seconds after the PR opens, on a
     placeholder holding zero findings. A poller that stops there hands a builder
     the words "please wait" as its review.
+
+    With `head_sha` given, only a review of THAT commit counts as ready -- the
+    same rule `two_axis_ready` has always applied to the other reviewer. Without
+    it the two halves of `await_reviews` disagreed about what "ready" means, and
+    a run started right after a push saw the PREVIOUS head's review, captured it
+    as this run's contract, and stopped on "already fixed" having waited for
+    nothing. Observed on PR #100: head 440bd678, contract review 4977547871 from
+    two days and one head earlier.
+
+    Defaults to "" so every existing caller keeps today's behaviour.
     """
     issue_comments = _api(f"repos/{repo}/issues/{pr}/comments", cwd=cwd)
     bodies = [c.get("body") or "" for c in issue_comments
@@ -297,8 +331,7 @@ def status(pr: int, *, repo: str, cwd: Path) -> ReviewStatus:
         return "skipped"
 
     reviews = _api(f"repos/{repo}/pulls/{pr}/reviews", cwd=cwd)
-    if any(MARKER_ACTIONABLE in (r.get("body") or "") for r in reviews
-           if (r.get("user") or {}).get("login") == BOT_LOGIN):
+    if any(_is_rabbit_review_of(r, head_sha) for r in reviews):
         return "ready"
 
     if any(MARKER_IN_PROGRESS in body for body in bodies):
@@ -481,7 +514,7 @@ def await_reviews(pr: int, *, repo: str, cwd: Path, timeout_seconds: float = 900
     """
     deadline = time.monotonic() + timeout_seconds
     while True:
-        rabbit_state = status(pr, repo=repo, cwd=cwd)
+        rabbit_state = status(pr, repo=repo, cwd=cwd, head_sha=head_sha)
         axis_state = ("ready" if two_axis_ready(pr, repo=repo, cwd=cwd, head_sha=head_sha)
                       else "absent")
         if on_poll:
@@ -489,7 +522,7 @@ def await_reviews(pr: int, *, repo: str, cwd: Path, timeout_seconds: float = 900
         if rabbit_state == "skipped":
             return None, None
         if rabbit_state == "ready" and axis_state == "ready":
-            return (capture(pr, repo=repo, cwd=cwd),
+            return (capture(pr, repo=repo, cwd=cwd, head_sha=head_sha),
                     capture_two_axis(pr, repo=repo, cwd=cwd, head_sha=head_sha))
         if time.monotonic() >= deadline:
             return None, None
@@ -536,15 +569,20 @@ def combined_contract(review: RabbitReview,
     return CombinedReview(findings=findings)
 
 
-def capture(pr: int, *, repo: str, cwd: Path) -> RabbitReview:
-    """Freeze the latest finished review into a contract. Raises if none is finished."""
+def capture(pr: int, *, repo: str, cwd: Path, head_sha: str = "") -> RabbitReview:
+    """Freeze the latest finished review into a contract. Raises if none is finished.
+
+    The head filter runs BEFORE "latest wins", for the same reason it does in
+    `capture_two_axis`: a review of an older commit judged code that is no
+    longer there, and letting it win would make it this run's contract.
+    """
     reviews = [r for r in _api(f"repos/{repo}/pulls/{pr}/reviews", cwd=cwd)
-               if (r.get("user") or {}).get("login") == BOT_LOGIN
-               and MARKER_ACTIONABLE in (r.get("body") or "")]
+               if _is_rabbit_review_of(r, head_sha)]
     if not reviews:
         raise CodeRabbitError(
-            f"PR #{pr} has no finished CodeRabbit review to capture "
-            f"(status: {status(pr, repo=repo, cwd=cwd)}).")
+            f"PR #{pr} has no finished CodeRabbit review to capture"
+            + (f" for head {head_sha[:12]}" if head_sha else "")
+            + f" (status: {status(pr, repo=repo, cwd=cwd, head_sha=head_sha)}).")
 
     review = reviews[-1]
     body = review.get("body") or ""

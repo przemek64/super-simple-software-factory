@@ -46,7 +46,7 @@ from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
 # Keep in step with adw_simple_sdlc.py — this ADW is identical in every phase.
-MAX_REVISION_LOOPS = 3
+MAX_REVISION_LOOPS = 4
 
 DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the "
                   "diff shows, then copy the write-up into app_docs/ as your task "
@@ -111,10 +111,15 @@ def main(prompt: str | None = None,
     # the documenter's diff exclude the plan commit this run is continuing.
     baseline = git_helper.rev("HEAD", cwd=run.work_root)
 
-    def commit(ph, envelope) -> None:
-        """Commit what the preceding phase produced, in that agent's own words."""
+    def commit(ph, envelope, since: str | None = None) -> None:
+        """Commit what the preceding phase produced, in that agent's own words.
+
+        `since` lets a clean tree still count as delivered work when the agent
+        committed it itself -- see git_helper.commit_all.
+        """
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(message, cwd=run.work_root), message=message)
+        ph.log(sha=git_helper.commit_all(message, cwd=run.work_root, since=since),
+               message=message)
 
     def record(ph, result) -> None:
         """Log a deterministic block's verdict — the same shape every ADW uses."""
@@ -139,6 +144,13 @@ def main(prompt: str | None = None,
     # Skipping this is not an optimisation but a correctness requirement: the
     # spec is already committed on the branch, and commit_all raises "nothing to
     # commit" on an unchanged tree.
+    # Captured BEFORE the commit, not after. On the resume path commit_plan is
+    # skipped -- the spec is already on the branch -- so reading HEAD afterwards
+    # returns the commit the plan is already in, and commit_all(since=plan_head)
+    # then sees an empty range and raises "nothing to commit" on exactly the
+    # resume case `since` was added for. The non-resume script captures it
+    # before the commit for this reason.
+    plan_head = git_helper.rev("HEAD", cwd=run.work_root)
     if not done("commit_plan"):
         with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
                                    description="Put the spec on record before any code exists to blur it")) as ph:
@@ -206,14 +218,22 @@ def main(prompt: str | None = None,
     # describing yet. The plan commit stands — it is a record of what was asked.
     verified = (test is not None and test.passed
                 and review is not None and review.approved)
+
+    # A green suite with an unapproved review is not the same failure as a
+    # broken build, and treating them alike threw away run 577358e2: 14.3M
+    # tokens, 20 of 21 requirements met, and the code left uncommitted in a
+    # worktree while the next run rebuilt it from nothing. When the suite is
+    # green and the reviewer is nearly satisfied, the branch goes out as a
+    # DRAFT carrying the open items, so p2/p3 and a person work on real code.
+    # The draft is the safety: the factory decider refuses to merge one.
+    readiness = None
+    if not verified and test is not None and test.passed and review is not None:
+        readiness = delivery.grade(review)
+
     if verified:
-        # Same reason commit_plan is guarded: the code is already on the branch
-        # from the run being resumed, and commit_all raises "nothing to commit"
-        # on an unchanged tree.
-        if not done("commit_build"):
-            with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
-                                       description="Land the code only now: green suite, approved review")) as ph:
-                commit(ph, build)
+        with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
+                                   description="Land the code only now: green suite, approved review")) as ph:
+            commit(ph, build, since=plan_head)
 
         with run.phase(PhaseParams(name="changes", kind="code", owner="git",
                                    description="Diff the whole run against its pinned baseline, for the documenter")) as ph:
@@ -251,6 +271,30 @@ def main(prompt: str | None = None,
                    state=pull_request.state,
                    action="created" if pull_request.created else "reused")
 
+    elif readiness is not None and readiness.deliverable:
+        with run.phase(PhaseParams(name="deliver_draft", kind="code", owner="git",
+                                   description="Push the unapproved but nearly-finished "
+                                               "branch as a draft, with the open items")) as ph:
+            commit(ph, build)
+            pull_request = delivery.deliver(
+                run, verified=False, document=None, issue_number=issue_number,
+                review=review, readiness=readiness,
+            )
+            if pull_request is None:
+                raise RuntimeError("a deliverable readiness returned no pull request")
+            ph.log(pr=f"PR #{pull_request.number}", url=pull_request.url,
+                   draft="yes", readiness=readiness.reason,
+                   action="created" if pull_request.created else "reused")
+
+    if verified:
+        return run.finish(accepted=True, reason="")
+    if readiness is not None and readiness.deliverable:
+        # Not accepted -- the reviewer did not approve it -- but the work is on
+        # a branch and in a draft PR, so say what actually happened.
+        return run.finish(
+            accepted=False,
+            reason=f"review not approved ({readiness.reason}); "
+                   f"delivered as a draft for the review stages")
     return run.finish(accepted=verified,
                       reason="the suite or the review never came back clean")
 

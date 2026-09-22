@@ -30,6 +30,81 @@ LABEL_CHARS = 80                # "bash: <command>" shown as the event name
 # The arg that identifies a call at a glance, in the order tools tend to use.
 PRIMARY_ARGS = ("command", "path", "file_path", "pattern", "query", "url")
 
+# The raw JSONL stream is unbounded by construction: an agent stuck in a loop
+# writes until the disk is gone. Observed single files of 1.4 GB and 2.9 GB, and
+# a run store of 5.5 GB that the permission guard then copied into a snapshot on
+# every agent phase. The disk filling mid-phase does not surface as a disk error
+# -- it surfaces as an unrelated test failing, which gets blamed on the code.
+#
+# So the stream is bounded here, while it is being written, rather than cleaned
+# up afterwards: after HEAD_BYTES the file stops growing and only the last
+# TAIL_BYTES are kept in memory, appended at close behind a marker. Head keeps
+# the setup and the shape of the loop; tail keeps the failure, which is the part
+# anyone reading this file is actually looking for.
+RAW_HEAD_BYTES = 256 * 1024 * 1024   # 256 MB: above the 95th percentile of real runs
+RAW_TAIL_BYTES = 32 * 1024 * 1024    # 32 MB of trailing context, held in memory
+
+
+class _BoundedRawWriter:
+    """Append-only writer that caps a file without losing its ending.
+
+    Writes through until `head_bytes`, then buffers to a bounded tail. Not
+    thread-safe; one writer per raw stream, which is how the read loop uses it.
+    """
+
+    TRUNCATION_MARKER = (
+        '{{"type":"sssf_truncation",'
+        '"note":"raw stream exceeded {head} bytes; {dropped} bytes of the middle '
+        'were dropped to bound disk use","tail_bytes":{tail}}}\n'
+    )
+
+    def __init__(self, handle, head_bytes: int = RAW_HEAD_BYTES,
+                 tail_bytes: int = RAW_TAIL_BYTES):
+        self._handle = handle
+        self._head_bytes = head_bytes
+        self._tail_bytes = tail_bytes
+        self._written = 0
+        self._dropped = 0
+        self._tail: list[str] = []
+        self._tail_size = 0
+
+    @property
+    def truncated(self) -> bool:
+        return self._dropped > 0 or bool(self._tail)
+
+    def write(self, line: str) -> None:
+        size = len(line.encode("utf-8", errors="replace"))
+        if self._written + size <= self._head_bytes:
+            self._handle.write(line)
+            self._written += size
+            return
+
+        self._tail.append(line)
+        self._tail_size += size
+        while self._tail_size > self._tail_bytes and len(self._tail) > 1:
+            evicted = self._tail.pop(0)
+            self._tail_size -= len(evicted.encode("utf-8", errors="replace"))
+            self._dropped += len(evicted.encode("utf-8", errors="replace"))
+
+    def flush(self) -> None:
+        self._handle.flush()
+
+    def close(self) -> None:
+        """Append the marker and the retained tail. Safe to call twice."""
+        if not self._tail:
+            self._handle.flush()
+            return
+        self._handle.write(
+            self.TRUNCATION_MARKER.format(
+                head=self._head_bytes, dropped=self._dropped, tail=self._tail_size
+            )
+        )
+        for line in self._tail:
+            self._handle.write(line)
+        self._tail = []
+        self._tail_size = 0
+        self._handle.flush()
+
 
 def _count(value: str) -> int:
     """Parse pi's compact model-list counts (`272K`, `1.0M`)."""
@@ -278,36 +353,44 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
         # an unqualified open() encodes as cp1252, and the first arrow or dash
         # the model emits raises UnicodeEncodeError from inside the read loop —
         # killing a phase that was otherwise working (fix_1, run afd2cc96).
-        with raw_path.open("a", encoding="utf-8", errors="replace") as raw:
+        with raw_path.open("a", encoding="utf-8", errors="replace") as raw_handle:
+            raw = _BoundedRawWriter(raw_handle)
             assert process.stdout is not None
-            for line in process.stdout:
-                raw.write(line)
-                raw.flush()                      # events land on disk as they happen
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("type") == "message_end":
-                    message = event.get("message", {})
-                    if message.get("role") == "assistant":
-                        text = _text_of(message) or _thinking_of(message)
-                        if text:
-                            result.text = text   # last assistant message wins
-                        usage = message.get("usage", {}) or {}
-                        turn = _context_tokens(usage)
-                        result.tokens += turn
-                        result.usage.add_turn(usage, turn)
-                        # Occupancy is read off the last VALID assistant turn, the
-                        # way pi does it — an aborted or errored turn reports usage
-                        # you can't trust, so it must not overwrite a good reading.
-                        if turn and message.get("stopReason") not in ("aborted", "error"):
-                            result.context_tokens = turn
-                        result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
-                if on_event:
-                    on_event(event)
+            try:
+                for line in process.stdout:
+                    raw.write(line)
+                    raw.flush()                      # events land on disk as they happen
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") == "message_end":
+                        message = event.get("message", {})
+                        if message.get("role") == "assistant":
+                            text = _text_of(message) or _thinking_of(message)
+                            if text:
+                                result.text = text   # last assistant message wins
+                            usage = message.get("usage", {}) or {}
+                            turn = _context_tokens(usage)
+                            result.tokens += turn
+                            result.usage.add_turn(usage, turn)
+                            # Occupancy is read off the last VALID assistant turn, the
+                            # way pi does it — an aborted or errored turn reports usage
+                            # you can't trust, so it must not overwrite a good reading.
+                            if turn and message.get("stopReason") not in ("aborted", "error"):
+                                result.context_tokens = turn
+                            result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
+                    if on_event:
+                        on_event(event)
+            finally:
+                # Flush the retained tail while the handle is still open, on
+                # EVERY exit. A guardrail aborting mid-stream leaves this loop
+                # by exception -- and that is the run whose ending most needs
+                # reading, so dropping the tail exactly there is backwards.
+                raw.close()
     except Exception:
         # A guardrail (or any other on_event callback) can abort mid-stream —
         # e.g. permissions.guard_tool_paths catching a call to a sibling repo.

@@ -30,12 +30,45 @@ def _work_path(run, value: str) -> Path:
     return path if path.is_absolute() else Path(run.work_root) / path
 
 
+def _git_ok(run, *args: str) -> bool:
+    """Run git in the work root; True when it exits 0. Absent git means False."""
+    try:
+        return subprocess.run(["git", *args], cwd=run.work_root, capture_output=True,
+                              text=True, encoding="utf-8").returncode == 0
+    except OSError:
+        return False
+
+
+def _unstageable(run, path: Path) -> bool:
+    """True when git would silently skip this path, so it can never be delivered.
+
+    An ignored path that is ALREADY tracked still commits — earlier work
+    force-added it — so only ignored-and-untracked is unreachable.
+    """
+    if not _git_ok(run, "check-ignore", "-q", str(path)):
+        return False
+    return not _git_ok(run, "ls-files", "--error-unmatch", str(path))
+
+
 def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
+    """Every declared artifact must exist AND be capable of reaching a commit.
+
+    Existence on disk is not delivery. A path matched by .gitignore is skipped
+    by `git add` without a word, so the gate would go green on an artifact that
+    never leaves the worktree. Failing closed is the right answer: the spec
+    asked for something this repo refuses to store, and that needs a human.
+    """
     report = GateReport()
     for a in envelope.artifacts:
         p = _work_path(run, a)
-        report.check(a, p.exists(),
-                     f"exists, {_size(p)}" if p.exists() else "declared artifact does not exist")
+        if not p.exists():
+            report.check(a, False, "declared artifact does not exist")
+        elif _unstageable(run, p):
+            report.check(a, False, "declared artifact is git-ignored — it exists on "
+                                   "disk but `git add` skips it, so it cannot reach the "
+                                   "pull request")
+        else:
+            report.check(a, True, f"exists, {_size(p)}")
     return report
 
 

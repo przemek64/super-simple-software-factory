@@ -40,14 +40,22 @@ def repo_root(*, cwd: Path) -> Path:
     return common_dir.parent if common_dir.name == ".git" else common_dir
 
 
-def commit_all(message: str, *, cwd: Path) -> str:
-    """Stage the working tree and commit it. Returns the new short sha."""
+def commit_all(message: str, *, cwd: Path, since: str | None = None) -> str:
+    """Stage the working tree and commit it. Returns the new short sha.
+
+    A clean tree carries two meanings: the preceding phases changed nothing, or
+    an agent already committed its own work. `since` separates them. Pass the
+    sha from before the phase ran: if the tree is clean but HEAD has moved past
+    it, the work landed and this returns that sha instead of failing the run.
+    """
     if not is_repo(cwd=cwd):
         raise RuntimeError(
             "not a git repository — a commit phase needs one. Run `git init` in the "
             "repo root (and make a first commit) before running an ADW that commits.")
     _git("add", "-A", cwd=cwd)
     if not _git("status", "--porcelain", cwd=cwd):
+        if since is not None and rev("HEAD", cwd=cwd) != rev(since, cwd=cwd):
+            return _git("rev-parse", "--short", "HEAD", cwd=cwd)
         raise RuntimeError("nothing to commit — the preceding phases changed no files")
     _git("commit", "-m", message, cwd=cwd)
     return _git("rev-parse", "--short", "HEAD", cwd=cwd)
