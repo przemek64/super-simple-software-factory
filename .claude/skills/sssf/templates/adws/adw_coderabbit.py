@@ -196,17 +196,31 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
                 on_poll=lambda rabbit, axis, left: ph.log(
                     rabbit=rabbit, two_axis=axis, seconds_left=int(left)))
             if review is None:
-                # Not a failure. The PR was already tested and reviewed by the
-                # factory's own chain; a missing rabbit review is not a defect
-                # in it, so the run ends clean rather than marking good work red.
-                ph.log(outcome="both reviews did not land — nothing to fix")
+                # Waited the whole timeout and neither review arrived. This
+                # used to end the run accepted, on the reasoning that a silent
+                # reviewer is not a defect in the pull request. True, and it
+                # hid a defect of our own: when the readiness test could not
+                # recognise a review layout (PR #284), the stage waited 30
+                # minutes, burned 0 tokens, reported success, and the pull
+                # request merged with a real finding unanswered. Nothing
+                # downstream can tell that apart from "correctly found
+                # nothing to fix" -- a successful reap even clears the failure
+                # streak. So it is reported as unaccepted: reap counts it, and
+                # a second identical one parks the item for a person to look
+                # at. It still commits nothing and pushes nothing.
+                ph.log(outcome="neither review landed",
+                       waited_seconds=int(timeout_seconds))
+                # The tree is pruned even so: nothing was edited, so there is
+                # nothing in it to open, and a kept worktree is ~1GB.
                 clean_exit = True
+                return run.finish(
+                    accepted=False,
+                    reason=(f"no reviewer answered on PR #{pr} within "
+                            f"{int(timeout_seconds)}s: nothing was triaged, "
+                            f"fixed or pushed"))
             else:
                 ph.log(review_id=review.review_id, findings=len(review.findings),
                        actionable=review.actionable_count, submitted=review.submitted_at)
-
-        if clean_exit:
-            return run.finish(accepted=True, reason="")
 
         previous = coderabbit.already_processed(review, repo=repo, data_dir=data_dir)
         if previous:

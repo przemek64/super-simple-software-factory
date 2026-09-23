@@ -59,11 +59,19 @@ RE_NITPICK_ENTRY = re.compile(r"^`(?P<lines>[\d-]+)`:\s*(?P<meta>.*)$")
 RE_NITPICK_FILE = re.compile(r"^<summary>(?P<path>[^<]+?)\s*\(\d+\)</summary>")
 RE_NITPICK_HEADING = re.compile(r"Nitpick comments \((?P<count>\d+)\)")
 RE_ACTIONABLE_COUNT = re.compile(r"Actionable comments posted:\s*(?P<count>\d+)")
+RE_OUTSIDE_HEADING = re.compile(r"Outside diff range comments \((?P<count>\d+)\)")
+# <summary><em>🟡 Minor</em> · Update the query count… · <code>file.md:52</code></summary>
+RE_OUTSIDE_ENTRY = re.compile(
+    r"^<summary><em>(?P<severity>[^<]+)</em>\s*·\s*(?P<title>.*?)\s*·\s*"
+    r"<code>(?P<path>[^<:]+):(?P<line>[\d-]+)</code></summary>")
+# `docs/adr/0017-....md:52` -- the full path, which the <code> above abbreviates
+RE_OUTSIDE_PATH = re.compile(r"^`(?P<path>[^`]+?):(?P<line>[\d-]+)`\s*$")
+RE_QUOTE_PREFIX = re.compile(r"^>\s?")
 RE_TITLE = re.compile(r"^\*\*(?P<title>.+?)\*\*\s*$")
 # _🩺 Stability & Availability_ | _🟠 Major_ | _⚡ Quick win_
 RE_META = re.compile(r"^_(?P<category>[^_]+)_\s*\|\s*_(?P<severity>[^_]+)_\s*\|\s*_(?P<effort>[^_]+)_")
 
-FindingSource = Literal["inline", "nitpick"]
+FindingSource = Literal["inline", "nitpick", "outside_diff"]
 ReviewStatus = Literal["ready", "in_progress", "skipped", "absent"]
 
 
@@ -240,6 +248,84 @@ def parse_inline_comments(comments: list[dict]) -> list[RabbitFinding]:
     return findings
 
 
+def parse_outside_diff(review_body: str) -> list[RabbitFinding]:
+    """Findings CodeRabbit could not post inline, from the review body.
+
+    GitHub refuses an inline comment on a line outside the diff, so CodeRabbit
+    publishes those findings in the review body instead, under an
+    `Outside diff range comments (N)` heading and inside a blockquote. They are
+    ordinary findings -- the one on PR #284 asked for a doc consequence the diff
+    had just made wrong -- and the same observation lands inline on another run,
+    so reading only the inline half loses real findings at random.
+
+    That review carried no `Actionable comments posted:` line at all, so this
+    section is also the only evidence the review is finished. See `status`.
+    """
+    if not RE_OUTSIDE_HEADING.search(review_body):
+        return []
+
+    section = review_body.split("Outside diff range comments", 1)[1]
+    for terminator in ("Prompt to fix review comments", "Review info",
+                       "Run configuration"):
+        section = section.split(terminator, 1)[0]
+    # The section is a blockquote: every line carries "> ". Stripped once here
+    # so the entry patterns read like the markup they match.
+    lines = [RE_QUOTE_PREFIX.sub("", raw) for raw in section.split("\n")]
+
+    findings: list[RabbitFinding] = []
+    pending: Optional[dict] = None
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if pending is None:
+            return
+        block = "\n".join(buffer)
+        # The bold line in the block wins over the <summary> text, which
+        # CodeRabbit truncates with an ellipsis ("...the SIMPLE" for "...the
+        # SIMPLE query."). The id is derived from the title, so a truncated one
+        # would also change the id between renders of the same finding.
+        title = _title_of(buffer) or pending["title"]
+        category, severity, effort = "", pending["severity"], ""
+        for candidate in buffer:
+            meta = _split_meta(candidate)
+            if any(meta):
+                category, severity, effort = meta
+                break
+        findings.append(RabbitFinding(
+            finding_id=_finding_id("outside_diff", pending["path"],
+                                   pending["line"], title),
+            source="outside_diff", path=pending["path"], line=pending["line"],
+            category=category, severity=severity, effort=effort,
+            title=title, detail=block.strip(),
+            agent_prompt=_extract_agent_prompt(block),
+        ))
+
+    for line in lines:
+        entry = RE_OUTSIDE_ENTRY.match(line.strip())
+        if entry:
+            flush()
+            pending = {"path": entry.group("path").strip(),
+                       "line": entry.group("line"),
+                       "title": entry.group("title").strip().rstrip("\u2026").strip(),
+                       "severity": entry.group("severity").strip()}
+            buffer = []
+            continue
+        if pending is None:
+            continue
+        # The first backticked line inside the block repeats the location with
+        # the FULL path; the <code> in the summary abbreviates it, and a triager
+        # handed "0017-....md" cannot open the file.
+        full = RE_OUTSIDE_PATH.match(line.strip())
+        if full and not pending.get("located"):
+            pending["path"] = full.group("path").strip()
+            pending["line"] = full.group("line")
+            pending["located"] = True
+        buffer.append(line)
+
+    flush()
+    return findings
+
+
 def parse_nitpicks(review_body: str) -> list[RabbitFinding]:
     """Findings from the collapsed 'Nitpick comments' section of the review body.
 
@@ -297,11 +383,30 @@ def parse_nitpicks(review_body: str) -> list[RabbitFinding]:
     return findings
 
 
+def _carries_findings(body: str) -> bool:
+    """Does this review body show CodeRabbit finished, and say what it found?
+
+    `Actionable comments posted:` is the usual header and was once the only
+    test. It is not always there: the review on PR #284 opened with a CAUTION
+    block and an `Outside diff range comments (1)` section instead, because
+    GitHub refuses an inline comment on a line outside the diff. That review was
+    finished and carried a real finding, and keying on the single header made it
+    invisible -- p3 waited out its whole timeout, exited "no review landed", and
+    the pull request merged with the finding unanswered.
+
+    So: any section that COUNTS findings means the review is finished. A
+    placeholder ("Currently processing") carries none of them.
+    """
+    return (MARKER_ACTIONABLE in body
+            or bool(RE_OUTSIDE_HEADING.search(body))
+            or bool(RE_NITPICK_HEADING.search(body)))
+
+
 def _is_rabbit_review_of(review: dict, head_sha: str = "") -> bool:
     """A finished CodeRabbit review, of `head_sha` when one is named."""
     if (review.get("user") or {}).get("login") != BOT_LOGIN:
         return False
-    if MARKER_ACTIONABLE not in (review.get("body") or ""):
+    if not _carries_findings(review.get("body") or ""):
         return False
     return not head_sha or (review.get("commit_id") or "") == head_sha
 
@@ -595,7 +700,8 @@ def capture(pr: int, *, repo: str, cwd: Path, head_sha: str = "") -> RabbitRevie
         submitted_at=review.get("submitted_at") or "",
         actionable_count=int(count_match.group("count")) if count_match else 0,
         head_sha=review.get("commit_id") or "",
-        findings=parse_inline_comments(inline) + parse_nitpicks(body),
+        findings=(parse_inline_comments(inline) + parse_nitpicks(body)
+                  + parse_outside_diff(body)),
     )
 
 
