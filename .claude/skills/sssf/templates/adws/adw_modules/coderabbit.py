@@ -47,6 +47,16 @@ MARKER_ACTIONABLE = "Actionable comments posted:"
 MARKER_IN_PROGRESS = "Currently processing"
 MARKER_SKIPPED = "Review skipped"
 
+# CodeRabbit's reply to a `full review` request when it has finished and has
+# nothing to say. The reply is a COMMENT, not a review, so every "is the review
+# ready" test reads absent and the stage waits out its whole timeout for
+# something that already happened. Observed on PR #285, 2026-09-23; the same
+# shape parked labeltool #264 as "answered but wrote no review".
+MARKER_REVIEW_FINISHED = "Full review finished"
+MARKER_BOT_REPLY = "auto-generated reply by CodeRabbit"
+# `... the whole pull request at `bff645f1` ...` — the head it answered for.
+RE_ANSWERED_REVISION = re.compile(r"pull request at `(?P<revision>[0-9a-f]{7,40})`")
+
 # The two-axis review (adw_pr_review_2axis_*.py) posts a body opening with this
 # line. Matched on the MARKER, never on the author or the model: the M3 and codex
 # variants post identical headers under the operator's own account, so a gate
@@ -409,6 +419,42 @@ def _is_rabbit_review_of(review: dict, head_sha: str = "") -> bool:
     if not _carries_findings(review.get("body") or ""):
         return False
     return not head_sha or (review.get("commit_id") or "") == head_sha
+
+
+def answered_without_findings(pr: int, *, repo: str, cwd: Path, head_sha: str = "") -> bool:
+    """Did the reviewer finish, at this head, and post no review at all?
+
+    Asking `@coderabbitai full review` gets a comment back — "Action performed
+    / Full review finished" — and, when the bot has nothing to report, nothing
+    else. No review object is ever created, so `status` reads `absent` forever
+    and the fix stage waits out its whole timeout on a question that was
+    answered minutes after it was asked.
+
+    That is a finished review of an empty findings set, and it must be told
+    apart from silence: silence means the contract never arrived and the run
+    has nothing to judge; this means the run may proceed with nothing to fix.
+    Without the distinction, a pull request that is genuinely clean can never
+    finish its fix stage, and the decider it feeds never reaches "all stages
+    done" -- so the merge that should need no human waits for one.
+
+    With `head_sha` given, only a reply naming THAT revision counts. CodeRabbit
+    quotes the revision it examined, and a reply about an earlier head says
+    nothing about the code on the branch now.
+    """
+    comments = _api(f"repos/{repo}/issues/{pr}/comments", cwd=cwd)
+    for comment in comments:
+        if (comment.get("user") or {}).get("login") != BOT_LOGIN:
+            continue
+        body = comment.get("body") or ""
+        if MARKER_REVIEW_FINISHED not in body:
+            continue
+        if not head_sha:
+            return True
+        match = RE_ANSWERED_REVISION.search(body)
+        # A reply that names no revision is not evidence about this head.
+        if match and head_sha.startswith(match.group("revision")):
+            return True
+    return False
 
 
 def status(pr: int, *, repo: str, cwd: Path, head_sha: str = "") -> ReviewStatus:

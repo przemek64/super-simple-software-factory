@@ -246,6 +246,18 @@ def review_is_pending(
         return False
     if requested_at is None:
         return False
+
+    # Answered, whatever it answered with. The reviewer replies to a full
+    # review request in a comment and posts a review only when it has
+    # something to say, so waiting for the review object treats every clean
+    # pull request as an outstanding request until the grace window expires.
+    # PR #285 sat there while the answer had been on the page for minutes.
+    try:
+        if artifacts.full_review_answered(
+                config.repo, pr.number, pr.revision, paths.root):
+            return False
+    except GhError:
+        pass  # unreadable comments: fall through to the time bound below
     moment = _moment(requested_at)
     if moment is None:
         return False

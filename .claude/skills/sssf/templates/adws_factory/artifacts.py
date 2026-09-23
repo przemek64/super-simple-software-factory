@@ -440,6 +440,37 @@ def issue_comments(repo: str, number: int, cwd: Path) -> list[IssueComment]:
 FULL_REVIEW_MARKER = "<!-- factory: full-review-requested {revision} -->"
 
 
+# The reviewer's reply to a `full review` request: a COMMENT saying it finished,
+# with no review object behind it when it has nothing to report. Recognising it
+# is what lets a clean pull request finish its fix stage without waiting out a
+# grace window for an answer that already arrived (PR #285, 2026-09-23).
+REVIEW_FINISHED_MARKER = "Full review finished"
+RE_ANSWERED_REVISION = re.compile(r"pull request at `(?P<revision>[0-9a-f]{7,40})`")
+
+
+def full_review_answered(repo: str, number: int, revision: str, cwd: Path) -> bool:
+    """Has the reviewer replied that it finished a full review OF THIS HEAD?
+
+    The reply names the revision it examined, so a reply about an earlier head
+    is not evidence about this one. A reply naming no revision is not evidence
+    either and is ignored rather than guessed at.
+
+    This answers "is the request still outstanding", which is a different
+    question from "did it post a review": the reviewer can finish and post
+    nothing, and treating that as an outstanding request kept the fix stage
+    unfinished until the grace window expired on every clean pull request.
+    """
+    for comment in issue_comments(repo, number, cwd):
+        if comment.author != CODERABBIT_LOGIN:
+            continue
+        if REVIEW_FINISHED_MARKER not in comment.body:
+            continue
+        match = RE_ANSWERED_REVISION.search(comment.body)
+        if match and revision.startswith(match.group("revision")):
+            return True
+    return False
+
+
 def full_review_requested_at(
     repo: str, number: int, revision: str, cwd: Path
 ) -> str | None:

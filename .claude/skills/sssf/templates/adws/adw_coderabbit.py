@@ -208,6 +208,21 @@ def main(pr: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
                 # streak. So it is reported as unaccepted: reap counts it, and
                 # a second identical one parks the item for a person to look
                 # at. It still commits nothing and pushes nothing.
+                # Did the reviewer already answer, at this head, with
+                # nothing? Asking for a full review gets a COMMENT back --
+                # "Full review finished" -- and no review object when there is
+                # nothing to report. Every readiness test reads that as
+                # absence, so a clean pull request could never finish this
+                # stage, and the decider it feeds never reached "all stages
+                # done": the merge that needs no human waited for one anyway.
+                # That is the whole of PR #285 and of #264's park.
+                if coderabbit.answered_without_findings(
+                        pr, repo=repo, cwd=repo_root, head_sha=head_sha):
+                    ph.log(outcome="reviewer answered this head with no findings",
+                           head_sha=head_sha[:12])
+                    clean_exit = True
+                    return run.finish(accepted=True, reason="")
+
                 ph.log(outcome="neither review landed",
                        waited_seconds=int(timeout_seconds))
                 # The tree is pruned even so: nothing was edited, so there is
