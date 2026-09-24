@@ -416,8 +416,16 @@ def _is_rabbit_review_of(review: dict, head_sha: str = "") -> bool:
     """A finished CodeRabbit review, of `head_sha` when one is named."""
     if (review.get("user") or {}).get("login") != BOT_LOGIN:
         return False
-    if not _carries_findings(review.get("body") or ""):
-        return False
+    # A verdict state is evidence on its own. With
+    # `reviews.request_changes_workflow: true` the reviewer submits
+    # CHANGES_REQUESTED while findings are open and APPROVED once they are
+    # resolved, so an approval is a finished review that found nothing -- and
+    # its body carries no findings section to recognise it by. Without this,
+    # the one configuration that makes the reviewer always speak would still
+    # read as silence here.
+    if (review.get("state") or "").upper() not in ("APPROVED", "CHANGES_REQUESTED"):
+        if not _carries_findings(review.get("body") or ""):
+            return False
     return not head_sha or (review.get("commit_id") or "") == head_sha
 
 
